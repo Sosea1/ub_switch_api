@@ -32,3 +32,20 @@ def route_ovs_vsctl_add_bridge():
     result = vsctl.run('add-br '+ bridge, 'list', 'json')
     return "bridge "+bridge+" has been added"
 ```
+## Настройка и решение проблем с OpenVSwitch
+Установка OpenVSwitch:</br>
+```
+sudo apt-get install openvswitch-switch
+```
+Открытие принимающего сокета к базе данных OpenVSwitch
+```
+ovs-vsctl set-manager ptcp:6640
+```
+Для того, чтобы с устройства с OpenVSwitch можно было пинговаться нужно ввести следующие команды:
+```
+ip addr flush dev eth0
+ip addr add 192.168.128.5/24 dev br0
+ip link set br0 up
+```
+где eth0 - интерфейс</br>
+а br0 - мост OVS 
