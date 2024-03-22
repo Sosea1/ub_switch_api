@@ -2,9 +2,10 @@ from app import app
 from flask import render_template, request, redirect, url_for, flash, make_response, session
 # from .models import User, Post, Category, Feedback, db
 # from .forms import ContactForm, LoginForm
-from .utils import makeRequest
+from .utils import makeRequest, parse_to_json
 from ovs_vsctl import VSCtl
-from ovs_vsctl import list_cmd_parser
+from ovs_vsctl import parser
+from app import vsctl
 
 
 @app.route("/")
@@ -16,7 +17,8 @@ def hello_world():
 #    выводит схему базы данных OpenVSwitch
 @app.route("/ovs/get-schema", methods = ['GET'])
 def route_ovs_get_schema():
-    makeRequest('tcp:127.0.0.1:6640', 'get_schema', ['Open_vSwitch']).result
+    return makeRequest('tcp:127.0.0.1:6640', 'get_schema', ['Open_vSwitch']).result
+    
 
 
 #----------ovs-vsctl-------------#
@@ -24,16 +26,15 @@ def route_ovs_get_schema():
 #    выводит схему OpenVSwitch
 @app.route("/ovs-vsctl/show", methods = ['GET'])
 def route_ovs_vsctl_show():
-    vsctl = VSCtl('tcp', '127.0.0.1', 6640)
     result = vsctl.run('show', 'list', 'json')
-    return result.stdout.read()
+    result = result.stdout.read().strip()
+    return parse_to_json(result)
 
 
 #    выполняет команду ovs-vsctl add-port `bridge `port`
 #   добавляет указанный порт в указанный мост с указанным тегом vlan
 @app.route("/ovs-vsctl/add-port")
 def route_ovs_vsctl_add_port():
-    vsctl = VSCtl('tcp', '127.0.0.1', 6640)
     bridge = request.args.get('bridge')        #берет из строки запроса аргумент `bridge` - мост в который добавить порт
     port = request.args.get('port')             #берет из строки запроса аргумент `port`  - название порта который нужно добавить
     vlan = request.args.get('vlan')             #берет из строки запроса аргумент `vlan`  - тег vlan для порта
@@ -50,7 +51,6 @@ def route_ovs_vsctl_add_port():
 #   удаляет указанный порт из указаного моста
 @app.route("/ovs-vsctl/del-port")
 def route_ovs_vsctl_del_port():
-    vsctl = VSCtl('tcp', '127.0.0.1', 6640)
     bridge = request.args.get('bridge')
     port = request.args.get('port')
     if(bridge == None or port == None):
@@ -67,7 +67,6 @@ def route_ovs_vsctl_add_bridge():
     bridge = request.args.get('bridge')      #берет из строки запроса аргумент `bridge` - название моста
     if(bridge == None):
         return "specify bridge"
-    vsctl = VSCtl('tcp', '127.0.0.1', 6640)
     result = vsctl.run('add-br '+ bridge, 'list', 'json')
     return "bridge "+bridge+" has been added"
 
@@ -78,9 +77,5 @@ def route_ovs_vsctl_del_bridge():
     bridge = request.args.get('bridge')
     if(bridge == None):
         return "specify bridge"
-    vsctl = VSCtl('tcp', '127.0.0.1', 6640)
     result = vsctl.run('del-br '+ bridge, 'list', 'json')
     return "bridge "+bridge+" has been deleted"
-
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)

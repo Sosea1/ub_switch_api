@@ -1,0 +1,48 @@
+# Добавление виртуального моста
+ovs-vsctl add-br <имя>(ovs-br0)
+
+# Подключение порта к мосту
+ovs-vsctl add-port <имя моста>(ovs-br0) <имя существующего интерфейса, порта>(eth0)
+
+# Удаление интерфейса
+ovs-vsctl del-port <имя порта>
+
+# Режим access для тегированного трафика
+ovs-vsctl set port <имя порта>(ovs-br0) tag=7
+
+# Режим trunk для порта
+ovs-vsctl set port <порт>(eth0) trunks=7,10,20,1010,1020,30,1030
+
+# Другой режим vlan
+ovs-vsctl set port <порт>(eth0) vlan_mode=native-untagged
+
+# Обнуление конфигурации интерфейса
+ifconfig <интерфейс>(eth0) 0
+Или
+ip addr flush dev <интерфейс>(eth0)
+
+# Включение интерфейса к IP стеку
+ip link set up dev <интерфейс>(ovs-br0)
+ip addr add <адрес с маской>(192.168.0.60/24) dev <интерфейс>(ovs-br0)
+
+# Шлюз по умолчанию
+ip route add default via <ip>(192.168.0.1)
+
+# Отобразить контент базы данных
+ovs-vsctl show
+
+# Открыть принимающий сокет к бд
+ovs-vsctl set-manager ptcp:6640
+
+# Для трасировки json-rpc запросов
+ovs-vsctl -vjsonrpc show
+
+
+ovs-vsctl add-br ovs-br0
+ovs-vsctl add-port ovs-br0 enp0s3
+ip addr flush dev enp0s3
+ip link set up dev ovs-br0
+ip addr add 192.168.0.60/24 dev ovs-br0
+ip route add default via 192.168.0.1
+
+
