@@ -1,3 +1,4 @@
+import subprocess
 from app import app
 from flask import render_template, request, redirect, url_for, flash, make_response, session
 # from .models import User, Post, Category, Feedback, db
@@ -79,3 +80,12 @@ def route_ovs_vsctl_del_bridge():
         return "specify bridge"
     result = vsctl.run('del-br '+ bridge, 'list', 'json')
     return "bridge "+bridge+" has been deleted"
+
+#    Пример запроса для выполнения команды linux
+#   Запрашиваем версию nftables 
+@app.route("/nft/get-version")
+def route_nft_get_version():
+    result = subprocess.run(["nft", "-v"], capture_output=True, text=True)
+    if result.returncode != 0:
+        return "The command failed with return code:\n"+result.returncode
+    return result.stdout
