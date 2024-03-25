@@ -89,3 +89,20 @@ def route_nft_get_version():
     if result.returncode != 0:
         return "The command failed with return code:\n"+result.returncode
     return result.stdout
+
+
+#   Включение фильтрации пакетов для интерфейса
+#   Для использования необходимо так же создавать таблицу и семейство для фильтрации
+@app.route("/nft/mac-filtering", methods=['POST'])
+def route_nft_mac_filtering():
+    interface = request.args.get('interface')
+    mac = request.args.get('mac')
+    if not interface or not mac:
+        return "interface and mac are required"
+    result = subprocess.run([
+        "nft", "add rule filter input iif {} ether saddr != {} drop".format(interface, mac)],
+        capture_output=True, text=True)
+    if result.returncode != 0:
+        return "The command failed with return code:\n"+str(result.returncode)
+    return result.stdout
+
