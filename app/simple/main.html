@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+   <meta charset="UTF-8">
+   <title>SWC</title>
+   <style>
+      .virtual_port {
+         position: relative;
+         display: flex;
+         background-image: url("simple/port.png");
+         background-size: cover;
+         justify-content: center;
+         width: 47px;
+         height: 47px;
+         display: table;
+      }
+
+      .virtual_port img {
+         width: 100%;
+         height: 100%;
+      }
+
+      .virtual_port span {
+         width: 8px;
+         height: 5px;
+         background: #394452;
+         position: absolute; 
+         top: 15%;
+      }
+
+      .virtual_port label {
+         position: absolute; top:62%; left:12%;
+         display: inline-block;
+         font-size: small;
+      }
+
+      .virtual_port span:nth-child(1) {
+         left: 10%;
+      }
+
+      .virtual_port span:nth-child(2) {
+         right: 10%;
+      }
+
+      @keyframes virt_port_anim {
+         0% {background: #06ff6e;}
+         50%,100% {background: #000;}
+      }
+
+      .virtual_port_l_up span:nth-child(1) {background: #ff5e00;}
+      .virtual_port_r_up span:nth-child(2) {background: #06ff6e;}
+      .virtual_port_r_active span:nth-child(2) {animation: virt_port_anim 200ms steps(1) infinite;}
+   </style>
+</head>
+
+<body>
+   <div id="virtual_ports" style="position: relative; justify-content: center; display: flex; flex-wrap: wrap;">
+   </div>
+
+   <div id="other_ports" style="position: relative; justify-content: center; display: flex; flex-wrap: wrap;">
+   </div>
+
+   <label> Test </label>
+
+   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+   <script>
+
+   function createPort(id, name) {
+      let obj = document.createElement("div");
+      obj.id = id;
+      obj.classList.add("virtual_port");
+      obj.appendChild(document.createElement("span"));
+      obj.appendChild(document.createElement("span"));
+      obj.appendChild(document.createElement("label"));
+      obj.lastChild.textContent = name;
+      return obj;
+   }
+
+   function recreateVirtualPorts(count) {
+      let ports = document.getElementById("virtual_ports")
+      ports.replaceChildren()
+      for (let iter = 0; iter < count; iter++)
+         ports.appendChild(createPort("virt"+iter, "virt"+iter));
+   }
+
+   var refreshSn = function ()
+   {
+      setTimeout(
+         function () {
+            const xhr = new XMLHttpRequest();
+            xhr.open("POST", "/api/v0/");
+            xhr.setRequestHeader("Content-Type", "application/json; charset=UTF-8")
+            xhr.onload = () => {
+               if (xhr.readyState == 4 && xhr.status == 200) {
+                  let json = JSON.parse(xhr.responseText);
+                  let port_count = json["virtual_ports"];
+                  let ports = document.getElementById("virtual_ports");
+                  if (ports.childNodes.length != port_count) {
+                     recreateVirtualPorts(port_count);
+                  }
+
+                  let active_virts = new Set();
+                  let active_others = new Set();
+                  let up_ports = new Set();
+                  let ports_activity = json["ports_activity"];
+                  for(let i = 0; i < ports_activity.length; i++) {
+                     let dev = ports_activity[i];
+                     let is_virt = dev.match("^virt(\d+)$");
+                     if (is_virt) {
+                        active_virts.add(is_virt[1]);
+                     } else {
+                        active_others.add(dev)
+                     }
+                  }
+
+                  // Обновляем активность виртуальных портов
+                  let ports_states = json["ports_states"];
+                  ports.childNodes.forEach((value, key) => {
+                     if (ports_states["virt"+key])
+                     {
+                        value.classList.add('virtual_port_l_up', 'virtual_port_r_up');
+                        if (active_virts.has(key))
+                        {
+                           value.classList.add('virtual_port_r_active');
+                           value.classList.remove('virtual_port_r_up');
+                        } else {
+                           value.classList.remove('virtual_port_r_active');
+                           value.classList.add('virtual_port_r_up');
+                        }
+                     } else {
+                        value.classList.remove('virtual_port_l_up', 'virtual_port_r_up');
+                     }
+                  });
+
+                  // Добавляем отсутствующие системные порты
+                  ports = document.getElementById("other_ports");
+                  for (const [key, value] of Object.entries(ports_states)) {
+                     if (key.match("^virt(\d+)$"))
+                        return;
+
+                     if (!document.getElementById("eth_"+key))
+                        ports.appendChild(createPort("eth_"+key, key));
+                  }
+
+
+                  // Убираем пропавшие системные порты
+                  let to_delete = []
+                  ports.childNodes.forEach((value, key) => {
+                     if (!value.id)
+                        return;
+
+                     if (!Object.keys(ports_states).includes(value.id.substring(4)))
+                        to_delete += value.nodeValue;
+                  });
+
+                  for(let iter = 0; iter < to_delete.length; iter++)
+                     ports.removeChild(to_delete[iter]);
+
+                  // Обновляем активность системных портов
+                  ports.childNodes.forEach((value, key) => {
+                     if (!value.id)
+                        return;
+
+                     if (ports_states[value.id.substring(4)])
+                     {
+                        value.classList.add('virtual_port_l_up');
+                        if (active_others.has(value.id.substring(4)))
+                        {
+                           value.classList.add('virtual_port_r_active');
+                           value.classList.remove('virtual_port_r_up');
+                        } else {
+                           value.classList.remove('virtual_port_r_active');
+                           value.classList.add('virtual_port_r_up');
+                        }
+                     } else {
+                        value.classList.remove('virtual_port_l_up', 'virtual_port_r_up');
+                     }
+                  });
+                  
+               } else {
+                  console.log(`Error: ${xhr.status} ${xhr.readyState}`);
+               }
+            };
+            xhr.send(JSON.stringify({"action": "get_port_configuration"}));
+
+            refreshSn();
+         },
+         1000 // 1 минута
+      );
+   };
+
+   refreshSn();
+   
+   // Array.from(document.querySelectorAll(".virtual_port"))
+   //       .forEach( (value, index) => {
+   //          value.classList.add('virtual_port_l_up', 'virtual_port_r_up', 'virtual_port_r_active')
+   //       });
+   </script>
+</body>
+</html>

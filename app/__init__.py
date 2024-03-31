@@ -1,13 +1,20 @@
 from flask import Flask
 import os, config
-from ovs_vsctl import VSCtl
+try:
+    from ovs_vsctl import VSCtl
+except Exception as exc:
+    print("Отсутствует модуль ovs_vsctl: " + str(exc))
 
 # создание экземпляра приложения
-app = Flask(__name__)
-app.config.from_object(os.environ.get('FLASK_ENV') or 'config.DevelopementConfig')
+webapi = Flask(__name__)
+webapi.config.from_object(os.environ.get('FLASK_ENV') or 'config.DevelopementConfig')
 
 # инициализирует расширения
-uri = app.config['DATABASE_URI'].split(':')
-vsctl = VSCtl(str(uri[0]), str(uri[1]), int(uri[2]))
+uri = webapi.config['DATABASE_URI'].split(':')
+try:
+    vsctl = VSCtl(str(uri[0]), str(uri[1]), int(uri[2]))
+except:
+    vsctl = NotImplemented
 
-from . import views
+
+from . import views, simple_interface

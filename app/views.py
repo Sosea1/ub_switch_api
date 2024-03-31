@@ -1,22 +1,30 @@
 import subprocess
-from app import app
+from app import webapi
 from flask import render_template, request, redirect, url_for, flash, make_response, session
 # from .models import User, Post, Category, Feedback, db
 # from .forms import ContactForm, LoginForm
 from .utils import makeRequest, parse_to_json
-from ovs_vsctl import VSCtl
-from ovs_vsctl import parser
+try:
+    from ovs_vsctl import VSCtl, parser
+except Exception as exc:
+    print("Отсутствует модуль ovs_vsctl: " + str(exc))
 from app import vsctl
 
 
-@app.route("/")
+@webapi.route("/")
 def hello_world():
     return "<p>Hello, World!</p>"
 
 
+#----------simple_interface-------------#
+#    Простой интерфейс управления и отладки
+#    /simple
+#    simple_interface.py
+
+
 #----------ovs-------------#
 #    выводит схему базы данных OpenVSwitch
-@app.route("/ovs/get-schema", methods = ['GET'])
+@webapi.route("/ovs/get-schema", methods = ['GET'])
 def route_ovs_get_schema():
     return makeRequest('tcp:127.0.0.1:6640', 'get_schema', ['Open_vSwitch']).result
     
@@ -25,7 +33,7 @@ def route_ovs_get_schema():
 #----------ovs-vsctl-------------#
 #    выполняет команду ovs-vsctl show
 #    выводит схему OpenVSwitch
-@app.route("/ovs-vsctl/show", methods = ['GET'])
+@webapi.route("/ovs-vsctl/show", methods = ['GET'])
 def route_ovs_vsctl_show():
     result = vsctl.run('show', 'list', 'json')
     result = result.stdout.read().strip()
@@ -34,7 +42,7 @@ def route_ovs_vsctl_show():
 
 #    выполняет команду ovs-vsctl add-port `bridge `port`
 #   добавляет указанный порт в указанный мост с указанным тегом vlan
-@app.route("/ovs-vsctl/add-port")
+@webapi.route("/ovs-vsctl/add-port")
 def route_ovs_vsctl_add_port():
     bridge = request.args.get('bridge')        #берет из строки запроса аргумент `bridge` - мост в который добавить порт
     port = request.args.get('port')             #берет из строки запроса аргумент `port`  - название порта который нужно добавить
@@ -50,7 +58,7 @@ def route_ovs_vsctl_add_port():
 
 #    выполняет команду ovs-vsctl del-port `bridge `port`
 #   удаляет указанный порт из указаного моста
-@app.route("/ovs-vsctl/del-port")
+@webapi.route("/ovs-vsctl/del-port")
 def route_ovs_vsctl_del_port():
     bridge = request.args.get('bridge')
     port = request.args.get('port')
@@ -63,7 +71,7 @@ def route_ovs_vsctl_del_port():
 
 #    выполняет команду ovs-vsctl add-br `bridge`
 #   добавляет указанный мост
-@app.route("/ovs-vsctl/add-bridge")
+@webapi.route("/ovs-vsctl/add-bridge")
 def route_ovs_vsctl_add_bridge():
     bridge = request.args.get('bridge')      #берет из строки запроса аргумент `bridge` - название моста
     if(bridge == None):
@@ -73,7 +81,7 @@ def route_ovs_vsctl_add_bridge():
 
 #    выполняет команду ovs-vsctl del-br `bridge`
 #   удаляет указанный мост
-@app.route("/ovs-vsctl/del-bridge")
+@webapi.route("/ovs-vsctl/del-bridge")
 def route_ovs_vsctl_del_bridge():
     bridge = request.args.get('bridge')
     if(bridge == None):
@@ -83,7 +91,7 @@ def route_ovs_vsctl_del_bridge():
 
 #    Пример запроса для выполнения команды linux
 #   Запрашиваем версию nftables 
-@app.route("/nft/get-version")
+@webapi.route("/nft/get-version")
 def route_nft_get_version():
     result = subprocess.run(["nft", "-v"], capture_output=True, text=True)
     if result.returncode != 0:
@@ -93,7 +101,7 @@ def route_nft_get_version():
 
 #   Включение фильтрации пакетов для интерфейса
 #   Для использования необходимо так же создавать таблицу и семейство для фильтрации
-@app.route("/nft/mac-filtering", methods=['POST'])
+@webapi.route("/nft/mac-filtering", methods=['POST'])
 def route_nft_mac_filtering():
     interface = request.args.get('interface')
     mac = request.args.get('mac')
