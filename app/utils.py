@@ -5,9 +5,12 @@
 import collections
 import json
 import re
+from typing import Union
 import ovs
 import ovs.jsonrpc
 import os
+import subprocess
+from copy import deepcopy
 
 
 def tabulateError(err):
@@ -80,3 +83,41 @@ def parse_to_json(result:str):
         result = json.loads(result, strict=False, object_pairs_hook=collections.OrderedDict)
         result = json.dumps(result, indent=4)
         return result
+    
+def nft_to_normal_json(json_ruleset):
+    ruleset = deepcopy(json_ruleset)
+    nftables = ruleset["nftables"][0]
+    nftables.update({"data":{}})
+    for value in json_ruleset["nftables"]:
+        if "table" in value:
+            name = "table-"+value["table"]["name"]
+            nftables["data"].update({name : value["table"]})
+        if "chain" in value:
+            table_name = "table-"+value["chain"]["table"]
+            chain_name = "chain-"+value["chain"]["name"]
+            nftables["data"][table_name].update({chain_name : value["chain"]})
+        if "rule" in value:
+            table_name = "table-"+value["rule"]["table"]
+            chain_name = "chain-"+value["rule"]["chain"]
+            
+            number = sum([1 for key in nftables["data"][table_name][chain_name].keys()
+                            if key.startswith("rule")])
+            number += 1
+            rule_name = "rule-"+str(number)
+            nftables["data"][table_name][chain_name].update({rule_name : value["rule"]})
+            
+    return nftables
+    
+def execute_bash_script(script: Union[list, str]):
+    if isinstance(script, list):
+        for command in script:
+            subprocess.run(command, shell=True, executable="/bin/bash")
+    
+    else:
+        return "str type not supported"
+                
+def execute_bash_command(command: str):
+    subprocess.run(command, shell=True, executable="/bin/bash")
+    
+
+        
