@@ -281,15 +281,13 @@ def route_nft_port_security():
     if interface == None:
         return "You must specify the interface"
         
-    if mac_address is None:      
-        command = "nft add rule ip port_security input iif {} {}".format(interface, action)
+    if action is None:      
+        command = "nft add rule ip port_security input iif {} ether saddr != {} drop".format(interface, mac_address, action)
         execute_bash_command(command)
         
     else:      
         command = "nft add rule ip port_security input iif {} ether saddr {} {}".format(interface, mac_address, action)
         execute_bash_command(command)
-    
-    command = "nft add rule ip port_security input iif {} drop".format(interface)
-    execute_bash_command(command)
+
     
     return "Rule added"
