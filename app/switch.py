@@ -2,6 +2,7 @@ import threading
 import time
 import re
 import pathlib
+from . import simple_interface
 
 SWC = None
 
@@ -75,7 +76,7 @@ class SwitchCore:
         for iter in to_delete:
             del self._last_packets_view[iter]
 
-        return {"virtual_ports": 24, "ports_states": exists_ports, "ports_activity": activity}
+        return simple_interface.create_result({"virtual_ports": 24, "ports_states": exists_ports, "ports_activity": activity})
 
     # Присоединяет свободный физический порт к виртуальному
     def bind_virtual_port(self, virtual_id, eth_name):

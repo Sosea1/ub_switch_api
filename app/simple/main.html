@@ -54,13 +54,22 @@
 </head>
 
 <body>
-   <div id="virtual_ports" style="position: relative; justify-content: center; display: flex; flex-wrap: wrap;">
+   <div style="display: flex; justify-content: space-around;">
+   <div style="vertical-align: middle;">
+      <label>Left menu</label>
+      <button onclick='makeRequest({"action": "init_swc"})'>Создать SWC</button>
    </div>
-
-   <div id="other_ports" style="position: relative; justify-content: center; display: flex; flex-wrap: wrap;">
+   <div style="min-width: 50%; max-width: 50%; text-align: center;">
+      <label id="global_status" style="color: red;"></label>
+      <label>Набор виртуальных портов</label>
+      <div id="virtual_ports" style="position: relative; justify-content: center; display: flex; flex-wrap: wrap;"></div>
+      <label>Набор инородных портов</label>
+      <div id="other_ports" style="position: relative; justify-content: center; display: flex; flex-wrap: wrap;"></div>
    </div>
-
-   <label> Test </label>
+   <div>
+      <label>Right menu</label>
+   </div>
+   </div>
 
    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
    <script>
@@ -89,12 +98,31 @@
          function () {
             const xhr = new XMLHttpRequest();
             xhr.open("POST", "/api/v0/");
-            xhr.setRequestHeader("Content-Type", "application/json; charset=UTF-8")
+            xhr.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
+            xhr.onerror = () => {
+               
+            };
             xhr.onload = () => {
                if (xhr.readyState == 4 && xhr.status == 200) {
-                  let json = JSON.parse(xhr.responseText);
-                  let port_count = json["virtual_ports"];
+                  let result = JSON.parse(xhr.responseText);
+                  let json = result["data"];
+
                   let ports = document.getElementById("virtual_ports");
+
+                  if (!result["ok"])
+                  {
+                     if (ports.childNodes.length > 0)
+                        ports.replaceChildren();
+
+                     if (result["debug"])
+                        $("#global_status").text(result["debug"]);
+                     else
+                        $("#global_status").text(result["reason"]);
+
+                     return;
+                  }
+
+                  let port_count = json["virtual_ports"];
                   if (ports.childNodes.length != port_count) {
                      recreateVirtualPorts(port_count);
                   }
@@ -150,11 +178,8 @@
                         return;
 
                      if (!Object.keys(ports_states).includes(value.id.substring(4)))
-                        to_delete += value.nodeValue;
+                        value.remove();
                   });
-
-                  for(let iter = 0; iter < to_delete.length; iter++)
-                     ports.removeChild(to_delete[iter]);
 
                   // Обновляем активность системных портов
                   ports.childNodes.forEach((value, key) => {
@@ -181,6 +206,7 @@
                   console.log(`Error: ${xhr.status} ${xhr.readyState}`);
                }
             };
+
             xhr.send(JSON.stringify({"action": "get_port_configuration"}));
 
             refreshSn();
@@ -191,10 +217,28 @@
 
    refreshSn();
    
-   // Array.from(document.querySelectorAll(".virtual_port"))
-   //       .forEach( (value, index) => {
-   //          value.classList.add('virtual_port_l_up', 'virtual_port_r_up', 'virtual_port_r_active')
-   //       });
+   function makeRequest(data, onload) {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/v0/");
+      xhr.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
+      if (onload)
+         xhr.onload = onload
+      else
+         xhr.onload = function() {
+            if (xhr.readyState == 4 && xhr.status == 200) {
+               let result = JSON.parse(xhr.responseText);
+               if (result["ok"])
+                  alert(data["action"]+" Ok");
+               else if (result["debug"])
+                  alert("Err "+data["debug"]);
+               else
+                  alert("Err "+data["reason"]);
+            }
+         }
+
+      xhr.send(JSON.stringify(data));
+   }
+
    </script>
 </body>
 </html>
