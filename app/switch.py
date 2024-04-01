@@ -2,6 +2,7 @@ import threading
 import time
 import re
 import pathlib
+from . import simple_interface
 
 SWC = None
 
@@ -20,6 +21,7 @@ class SwitchCore:
 
         # Здесь необходимо проверить конфигурацию OpenVSwitch и nftables,
         # касаемо виртуальных портов
+        
 
         # Запуск рабочего потока
         self._thread_loop = threading.Thread(target=self._run)
@@ -43,39 +45,51 @@ class SwitchCore:
             print("WatchDog: поток ядра коммутатора не завершил работу вовремя")
             
     # Возвращает конфигурацию портов и их состояние в виде словаря
+    # { ports_states: {"eth0": 1, "eth1": 0, "eth2": 2}, -- eth1=up, eth2=down, eth3=под влиянием stp
+    #   ports_activity: ["eth0"], -- Если за последнюю секунду был трафик в данном порту
+    #   update_id: 1234567 -- id текущей смены конфигурации портов, увеличивается при переключении состояния портов
+    # }
+    #
     def get_ports(self) -> dict:
-        activity = []
-        exists_ports = {}
+        activity = []   # Список активных портов
+        states = {}     # Таблица состояний портов
+
+        # Считываем кодичество пакетов, прошедших через порты для определения активности
         lines = open("/proc/net/dev", "r").readlines()[2:]
         for line in lines:
             match = re.match(r"^ *([\w\d\-_]+): +\d+ +(\d+)", line)
             if not match:
                 continue
 
-            dev = match[1]
-            packets = int(match[2])
-            exists_ports[dev] = False
+            dev = match[1]  # Устройство
+            packets = int(match[2]) # Количество пакетов
 
-            if dev not in self._last_packets_view or packets != self._last_packets_view[dev]:
-                activity.append(dev)
+            # Запись о количестве пакетов порта не найдена, либо количество пакетов изменилось
+            contains = dev in self._last_packets_view
+            if not contains or packets != self._last_packets_view[dev]:
+                if contains:
+                    activity.append(dev)
+
                 self._last_packets_view[dev] = packets
 
-        device_up = set()
+        # Сбор информации о состоянии портов
         devs = pathlib.Path("/sys/class/net/")
         for dir in devs.iterdir():
             if "down" not in open(dir / "operstate", "r").readline():
-                device_up.add(dir.name)
-                exists_ports[dir.name] = True
+                states[dir.name] = 1   # Порт действует/работает и/или включен
+            else:
+                states[dir.name] = 0   # Порт отключён
 
+        # Если найдётся запись о количестве пакетов для несуществующего порта, то она будет удалена
         to_delete = []
         for iter in self._last_packets_view:
-            if iter not in device_up:
+            if iter not in states:
                 to_delete.append(iter)
 
         for iter in to_delete:
             del self._last_packets_view[iter]
-
-        return {"virtual_ports": 24, "ports_states": exists_ports, "ports_activity": activity}
+        
+        return simple_interface.create_result({"update_id": int(time.time()), "states": states, "activity": activity})
 
     # Присоединяет свободный физический порт к виртуальному
     def bind_virtual_port(self, virtual_id, eth_name):
