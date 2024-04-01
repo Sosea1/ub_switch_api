@@ -289,4 +289,7 @@ def route_nft_port_security():
         command = "nft add rule ip port_security input iif {} ether saddr {} {}".format(interface, mac_address, action)
         execute_bash_command(command)
     
+    command = "nft add rule ip port_security input iif {} drop".format(interface)
+    execute_bash_command(command)
+    
     return "Rule added"
