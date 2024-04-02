@@ -138,34 +138,34 @@ def route_nft_dhcp_snooping_enable():
     nftables = nft_to_normal_json(json_ruleset)
     if "table-dhcp_snooping" not in nftables["data"]:
         script = []
-        script.append("nft add table ip dhcp_snooping")
-        script.append("nft add chain ip dhcp_snooping input { type filter hook input priority 0 \; }")
-        script.append("nft add chain ip dhcp_snooping forward { type filter hook forward priority 0 \; }")
-        script.append("nft add rule ip dhcp_snooping input ct state established,related accept")
-        script.append("nft add rule ip dhcp_snooping input ct state invalid drop")
-        script.append("nft add rule ip dhcp_snooping input udp dport 67 drop")
-        script.append("nft add rule ip dhcp_snooping input udp dport 68 drop")
+        script.append("nft add table netdev dhcp_snooping")
+        script.append("nft add chain netdev dhcp_snooping input { type filter hook ingress priority 0 \; }")
+        script.append("nft add chain netdev dhcp_snooping forward { type filter hook forward priority 0 \; }")
+        script.append("nft add rule netdev dhcp_snooping input ct state established,related accept")
+        script.append("nft add rule netdev dhcp_snooping input ct state invalid drop")
+        script.append("nft add rule netdev dhcp_snooping input udp dport 67 drop")
+        script.append("nft add rule netdev dhcp_snooping input udp dport 68 drop")
         execute_bash_script(script)
         
     elif "chain-input" not in nftables["data"]["table-dhcp_snooping"]:
         script = []
-        script.append("nft add chain ip dhcp_snooping input { type filter hook input priority 0 \; }")
-        script.append("nft add rule ip dhcp_snooping input ct state established,related accept")
-        script.append("nft add rule ip dhcp_snooping input ct state invalid drop")
-        script.append("nft add rule ip dhcp_snooping input udp dport 67 drop")
-        script.append("nft add rule ip dhcp_snooping input udp dport 68 drop")
+        script.append("nft add chain netdev dhcp_snooping input { type filter hook ingress priority 0 \; }")
+        script.append("nft add rule netdev dhcp_snooping input ct state established,related accept")
+        script.append("nft add rule netdev dhcp_snooping input ct state invalid drop")
+        script.append("nft add rule netdev dhcp_snooping input udp dport 67 drop")
+        script.append("nft add rule netdev dhcp_snooping input udp dport 68 drop")
         execute_bash_script(script)
     
     elif "ct" not in nftables["data"]["table-dhcp_snooping"]["chain-input"]:
         script = []
-        script.append("nft add rule ip dhcp_snooping input ct state established,related accept")
-        script.append("nft add rule ip dhcp_snooping input ct state invalid drop")
+        script.append("nft add rule netdev dhcp_snooping input ct state established,related accept")
+        script.append("nft add rule netdev dhcp_snooping input ct state invalid drop")
         execute_bash_script(script)
         
     elif "protocol" not in nftables["data"]["table-dhcp_snooping"]["chain-input"]:
         script = []
-        script.append("nft add rule ip dhcp_snooping input udp dport 67 drop")
-        script.append("nft add rule ip dhcp_snooping input udp dport 68 drop")
+        script.append("nft add rule netdev dhcp_snooping input udp dport 67 drop")
+        script.append("nft add rule netdev dhcp_snooping input udp dport 68 drop")
         execute_bash_script(script)
     
     
@@ -232,13 +232,13 @@ def route_nft_dhcp_snooping():
         command = "nft delete rule dhcp_snooping input handle {}".format(handle)
         execute_bash_command(command)
         
-        command = "nft add rule ip dhcp_snooping input iif {} udp dport 67 {}".format(interface, action)
+        command = "nft add rule netdev dhcp_snooping input iif {} udp dport 67 {}".format(interface, action)
         execute_bash_command(command)
-        command = "nft add rule ip dhcp_snooping input iif {} udp dport 68 {}".format(interface, action)
+        command = "nft add rule netdev dhcp_snooping input iif {} udp dport 68 {}".format(interface, action)
         execute_bash_command(command)
         script = []
-        script.append("nft add rule ip dhcp_snooping input udp dport 67 drop")
-        script.append("nft add rule ip dhcp_snooping input udp dport 68 drop")
+        script.append("nft add rule netdev dhcp_snooping input udp dport 67 drop")
+        script.append("nft add rule netdev dhcp_snooping input udp dport 68 drop")
         execute_bash_script(script)
         
     return "Rule added"
