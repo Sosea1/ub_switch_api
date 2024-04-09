@@ -10,6 +10,7 @@ try:
 except Exception as exc:
     print("Отсутствует модуль ovs_vsctl: " + str(exc))
 from app import vsctl
+import os.path
 
 
 @webapi.route("/")
@@ -119,8 +120,8 @@ def route_nft_mac_filtering():
 #--------------DHCP SNOOPING--------------------
 
 # Вывод списка правил nft в json формате
-@webapi.route("/dhcp-snooping/ruleset")
-def route_nft_dhcp_snooping_ruleset():
+@webapi.route("/nft-ruleset")
+def route_nft_ruleset():
     json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
     if json_ruleset.returncode != 0:
         return "The command failed with return code:\n"+json_ruleset.returncode
@@ -131,123 +132,168 @@ def route_nft_dhcp_snooping_ruleset():
 #  Включение DHCP Snooping 
 @webapi.route("/dhcp-snooping/enable")
 def route_nft_dhcp_snooping_enable():
-    json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
-    if json_ruleset.returncode != 0:
-        return "The command failed with return code:\n"+json_ruleset.returncode
-    json_ruleset = json.loads(json_ruleset.stdout)
-    nftables = nft_to_normal_json(json_ruleset)
-    if "table-dhcp_snooping" not in nftables["data"]:
-        script = []
-        script.append("nft add table netdev dhcp_snooping")
-        script.append("nft add chain netdev dhcp_snooping input { type filter hook ingress priority 0 \; }")
-        script.append("nft add chain netdev dhcp_snooping forward { type filter hook forward priority 0 \; }")
-        script.append("nft add rule netdev dhcp_snooping input ct state established,related accept")
-        script.append("nft add rule netdev dhcp_snooping input ct state invalid drop")
-        script.append("nft add rule netdev dhcp_snooping input udp dport 67 drop")
-        script.append("nft add rule netdev dhcp_snooping input udp dport 68 drop")
-        execute_bash_script(script)
-        
-    elif "chain-input" not in nftables["data"]["table-dhcp_snooping"]:
-        script = []
-        script.append("nft add chain netdev dhcp_snooping input { type filter hook ingress priority 0 \; }")
-        script.append("nft add rule netdev dhcp_snooping input ct state established,related accept")
-        script.append("nft add rule netdev dhcp_snooping input ct state invalid drop")
-        script.append("nft add rule netdev dhcp_snooping input udp dport 67 drop")
-        script.append("nft add rule netdev dhcp_snooping input udp dport 68 drop")
-        execute_bash_script(script)
+    interfaces = request.args.getlist('int')
+    path_to_script = "/root/dhcp_snooping/dhcp_snooping.o"  # может быть другой, подготовить нужно самим
+    for interface in interfaces:
+        command = "ip link set dev {} xdp object {} section xdp_udp_drop".format(interface, path_to_script)
+        execute_bash_command(command)
     
-    elif "ct" not in nftables["data"]["table-dhcp_snooping"]["chain-input"]:
-        script = []
-        script.append("nft add rule netdev dhcp_snooping input ct state established,related accept")
-        script.append("nft add rule netdev dhcp_snooping input ct state invalid drop")
-        execute_bash_script(script)
-        
-    elif "protocol" not in nftables["data"]["table-dhcp_snooping"]["chain-input"]:
-        script = []
-        script.append("nft add rule netdev dhcp_snooping input udp dport 67 drop")
-        script.append("nft add rule netdev dhcp_snooping input udp dport 68 drop")
-        execute_bash_script(script)
-    
-    
-    #print(json.dumps(json_ruleset, indent=4))
-    return "DHCP Snooping enabled"
+    return "DHCP Snooping enabled for all given interfaces"
 
 #  Выключение DHCP Snooping 
 @webapi.route("/dhcp-snooping/disable")
 def route_nft_dhcp_snooping_disable():
-    json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
-    if json_ruleset.returncode != 0:
-        return "The command failed with return code:\n"+json_ruleset.returncode
-    json_ruleset = json.loads(json_ruleset.stdout)
-    nftables = nft_to_normal_json(json_ruleset)
+    interfaces = request.args.getlist('int')
+    for interface in interfaces:
+        command = "ip link set {} xdpgeneric off".format(interface)
+        execute_bash_command(command)
     
-    if "table-dhcp_snooping" not in nftables["data"]:
-        return "DHCP Snooping not enabled"
+    return "DHCP Snooping disabled for all given interfaces"
+
+
+@webapi.route("/dhcp-snooping/add")
+def route_nft_dhcp_snooping_add():
+    interface = request.args.get('int')
+    address = request.args.get('address')
+    if interface is None:
+        return "specify interface"
+    if address is None:
+        return "specify address"
+    address = list(address.split('.'))
+    address = list(map(int, address))
+    address = list(map(hex, address))
+    ip_address = '0x'
+    for add in address:
+        hex_ = add[2:]
+        if (len(hex_) == 1):
+            hex_ = '0' + hex_
+        ip_address += hex_
+    path = "/root/dhcp_snooping/dhcp_snooping_" + interface + ".c"
+    if os.path.isfile(path):
+        lines = None
+        with open(path, 'r') as f:
+            lines = f.readlines()
+        with open(path, 'w') as f:
+            for line in lines:
+                new_line = line
+                if "dhcp_server_ip[]" in line:
+                    index = line.index("{")
+                    index2 = line.index("}")
+                    ips = line[index+1:index2].split(',')
+                    if(ips[0] == ''):
+                        ips = []
+                    if ip_address not in ips:
+                        ips.append(ip_address)
+                        
+                    new_line = "uint32_t dhcp_server_ip[] = {"
+                    for i in range(len(ips)):
+                        if i == len(ips) - 1:
+                            new_line += ips[i] + "};\n"
+                        else:
+                            new_line += ips[i] + ","
+                f.write(new_line)
     else:
-        command = "nft delete rule dhcp_snooping input handle {}".format()
-        execute_bash_command(command)
+        lines = None
+        with open("/root/dhcp_snooping/dhcp_snooping_ip.c", 'r') as f:
+            lines = f.readlines()
+        with open(path, 'w') as f:
+            for line in lines:
+                new_line = line
+                if "dhcp_server_ip[]" in line:
+                    index = line.index("{")
+                    index2 = line.index("}")
+                    ips = line[index+1:index2].split(',')
+                    if(ips[0] == ''):
+                        ips = []
+                    if ip_address not in ips:
+                        ips.append(ip_address)
+                    new_line = "uint32_t dhcp_server_ip[] = {"
+                    for i in range(len(ips)):
+                        if i == len(ips) - 1:
+                            new_line += ips[i] + "};\n"
+                        else:
+                            new_line += ips[i] + ","
+                f.write(new_line)
+    o_path = "/root/dhcp_snooping/dhcp_snooping_" + interface + ".o"
+    command = "clang -O2 -g -Wall -target bpf -c {} -o {}".format(path, o_path)
+    execute_bash_command(command)
+    command = "ip link set {} xdpgeneric off".format(interface)
+    execute_bash_command(command)
+    command = "ip link set dev {} xdp object {} section xdp_udp_drop".format(interface, o_path)
+    execute_bash_command(command)
+    return "address added"
 
-    #print(json.dumps(json_ruleset, indent=4))
-    return "DHCP Snooping enabled"
 
-
-@webapi.route("/dhcp-snooping")
-def route_nft_dhcp_snooping():
-    json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
-    if json_ruleset.returncode != 0:
-        return "The command failed with return code:\n"+json_ruleset.returncode
-    json_ruleset = json.loads(json_ruleset.stdout)
-    nftables = nft_to_normal_json(json_ruleset)
-    if "table-dhcp_snooping" not in nftables["data"]:
-        return "DHCP Snooping not enabled. \n Use route '/dhcp-snooping/enable' to enable DHCP Snooping"
-    interface = request.args.get('interface')
-    trust = request.args.get('trust')
-    server_address = request.args.get('dhcp_ip')
-    if interface == None:
-        return "You must specify the interface"
+@webapi.route("/dhcp-snooping/remove")
+def route_nft_dhcp_snooping_remove():
+    interface = request.args.get('int')
+    address = request.args.get('address')
+    if interface is None:
+        return "specify interface"
+    if address is None:
+        return "specify address"
+    address = list(address.split('.'))
+    address = list(map(int, address))
+    address = list(map(hex, address))
+    ip_address = '0x'
+    for add in address:
+        hex_ = add[2:]
+        if (len(hex_) == 1):
+            hex_ = '0' + hex_
+        ip_address += hex_
+    path = "/root/dhcp_snooping/dhcp_snooping_" + interface + ".c"
+    flag = False
+    if os.path.isfile(path):
+        lines = None
+        with open(path, 'r') as f:
+            lines = f.readlines()
+        with open(path, 'w') as f:
+            for line in lines:
+                new_line = line
+                if "dhcp_server_ip[]" in line:
+                    index = line.index("{")
+                    index2 = line.index("}")
+                    ips = line[index+1:index2].split(',')
+                    if(ips[0] == ''):
+                        ips = []
+                    try:
+                        ips.remove(ip_address)
+                    except:
+                        return "Такого адреса нет"
+                        
+                    new_line = "uint32_t dhcp_server_ip[] = {"
+                    if(len(ips) == 0):
+                        flag = True
+                        new_line += "};\n"
+                    for i in range(len(ips)):
+                        if i == len(ips) - 1:
+                            new_line += ips[i] + "};\n"
+                        else:
+                            new_line += ips[i] + ","
+                f.write(new_line)
+    else:
+        return "Такого адреса нет"
     
-    if server_address is None:
-        
-        if trust.lower() == "yes":
-            action = "accept"
-            
-        elif trust.lower() == "no":
-            action = "drop"
-            
-        else:
-            return "trust can be either 'yes' or 'no'"
-        
-                
-        table_name = "table-dhcp_snooping"
-        chain_name = "chain-input"
-            
-        number = sum([1 for key in nftables["data"][table_name][chain_name].keys()
-                            if key.startswith("rule")])
-        rule_number = "rule-"+str(number)
-        handle = nftables["data"][table_name][chain_name][rule_number]["handle"]
-        command = "nft delete rule dhcp_snooping input handle {}".format(handle)
-        execute_bash_command(command)
-        rule_number = "rule-"+str(number-1)
-        handle = nftables["data"][table_name][chain_name][rule_number]["handle"]
-        command = "nft delete rule dhcp_snooping input handle {}".format(handle)
+    command = "ip link set {} xdpgeneric off".format(interface)
+    execute_bash_command(command)
+    if flag == True: 
+        o_path = "/root/dhcp_snooping/dhcp_snooping.o"
+        command = "ip link set dev {} xdp object {} section xdp_udp_drop".format(interface, o_path)
         execute_bash_command(command)
         
-        command = "nft add rule netdev dhcp_snooping input iif {} udp dport 67 {}".format(interface, action)
+    else:
+        o_path = "/root/dhcp_snooping/dhcp_snooping_" + interface + ".o"
+        command = "clang -O2 -g -Wall -target bpf -c {} -o {}".format(path, o_path)
         execute_bash_command(command)
-        command = "nft add rule netdev dhcp_snooping input iif {} udp dport 68 {}".format(interface, action)
+        command = "ip link set dev {} xdp object {} section xdp_udp_drop".format(interface, o_path)
         execute_bash_command(command)
-        script = []
-        script.append("nft add rule netdev dhcp_snooping input udp dport 67 drop")
-        script.append("nft add rule netdev dhcp_snooping input udp dport 68 drop")
-        execute_bash_script(script)
-        
-    return "Rule added"
-
+    
+    return "address added"
 
 
 #--------------PORT SECURITY--------------------
 @webapi.route("/port-security/enable")
-def route_nft_port_security_enable():
+def route_port_security_enable():
     json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
     if json_ruleset.returncode != 0:
         return "The command failed with return code:\n"+json_ruleset.returncode
@@ -262,9 +308,22 @@ def route_nft_port_security_enable():
     #print(json.dumps(json_ruleset, indent=4))
     return "PORT SECURITY enabled"
 
+@webapi.route("/port-security/disable")
+def route_port_security_disable():
+    json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
+    if json_ruleset.returncode != 0:
+        return "The command failed with return code:\n"+json_ruleset.returncode
+    json_ruleset = json.loads(json_ruleset.stdout)
+    nftables = nft_to_normal_json(json_ruleset)
+    if "table-port_security" not in nftables["data"]:
+        script = []
+        script.append("nft delete table ip port_security")
+        execute_bash_script(script)
+    #print(json.dumps(json_ruleset, indent=4))
+    return "PORT SECURITY enabled"
 
-@webapi.route("/port_security")
-def route_nft_port_security():
+@webapi.route("/port_security/static")
+def route_port_security_static():
     json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
     if json_ruleset.returncode != 0:
         return "The command failed with return code:\n"+json_ruleset.returncode
@@ -273,11 +332,27 @@ def route_nft_port_security():
     if "table-port_security" not in nftables["data"]:
         return "PORT SECURITY not enabled. \n Use route '/port-security/enable' to enable PORT SECURITY"
     interface = request.args.get('interface')
-    print(interface)
     mac_address = request.args.get('mac_address')
-    print(mac_address)
+    if interface == None:
+        return "You must specify the interface"
+        
+    command = "nft add rule ip port_security input iif {} ether saddr != {} drop".format(interface, mac_address)
+    execute_bash_command(command)
+    
+    return "Rule added"
+
+@webapi.route("/port_security/sticky")
+def route_port_security_sticky():
+    json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
+    if json_ruleset.returncode != 0:
+        return "The command failed with return code:\n"+json_ruleset.returncode
+    json_ruleset = json.loads(json_ruleset.stdout)
+    nftables = nft_to_normal_json(json_ruleset)
+    if "table-port_security" not in nftables["data"]:
+        return "PORT SECURITY not enabled. \n Use route '/port-security/enable' to enable PORT SECURITY"
+    interface = request.args.get('interface')
+    mac_address = request.args.get('mac_address')
     action = request.args.get('action')
-    print(action)
     if interface == None:
         return "You must specify the interface"
         
@@ -291,3 +366,12 @@ def route_nft_port_security():
 
     
     return "Rule added"
+
+@webapi.route("/port_security/violation")
+def route_nft_port_security_violation():
+    interface = request.args.get('interface')
+    action = request.args.get('action')
+
+    # action == Protect or Restrict or Shutdown
+    
+    return "Не реализовано пока"
