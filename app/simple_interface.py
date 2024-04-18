@@ -2,6 +2,7 @@ from app import webapi
 from flask import request, send_from_directory, make_response
 from enum import Enum
 from . import switch
+import traceback
 
 class Flags(Enum):
     SWC_NOT_INITIALIZED = 1,
@@ -109,11 +110,41 @@ def web_apiV0():
             case "get_port_configuration":
                 return switch.SWC.get_ports()
 
+            case "create_bridge":
+                br_name = json.get("br_name")
+                if not br_name:
+                    return create_error('Отсутствует параметр br_name')
+                return switch.SWC.create_bridge(br_name)
+
+            case "remove_bridge":
+                br_name = json.get("br_name")
+                if not br_name:
+                    return create_error('Отсутствует параметр br_name')
+                return switch.SWC.remove_bridge(br_name)
+
+            case "add_port_to_bridge":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                br_name = json.get("br_name")
+                if not br_name:
+                    return create_error('Отсутствует параметр br_name')
+
+                return switch.SWC.add_port_to_bridge(port_name, br_name)
+
+            case "remove_port_from_bridge":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.remove_port_from_bridge(port_name)
+
             case _:
                 return create_error('Отсутствует обработчик для запроса action='+action)
 
     except Exception as exc:
-        return create_error('Необработанная ошибка при обработке POST запроса: ' + str(type(exc)) + ' -> ' + str(exc), flags=[Flags.BUG])
+        return create_error('Необработанная ошибка при обработке POST запроса: ' + str(type(exc)) + ' -> ' + str(exc) + '\n' + traceback.format_exc(), flags=[Flags.BUG])
 
 
 # Инициализация ядра коммутатора
@@ -121,5 +152,5 @@ def web_action_init_swc():
     if switch.SWC:
         return create_error("Уже инициализировано")
 
-    switch.SWC = switch.SwitchCore(24)
+    switch.SWC = switch.SwitchCore(virtual_ports=24)
     return create_result("Будет сделано")

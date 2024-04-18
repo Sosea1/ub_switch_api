@@ -4,15 +4,23 @@
    <meta charset="UTF-8">
    <title>SWC</title>
    <style>
+      .port_internal {
+         background-image: url("simple/port_internal.png");
+      }
+
+      .port_bridge {
+         background-image: url("simple/port_bridge.png");
+      }
+
       .port {
          position: relative;
          display: flex;
-         background-image: url("simple/port.png");
          background-size: cover;
          justify-content: center;
          width: 64px;
          height: 64px;
          display: table;
+         margin-bottom: 1%;
       }
 
       .port img {
@@ -49,13 +57,20 @@
       }
 
       @keyframes virt_port_anim {
-         0% {background: #06ff6e;}
+         0% {background: #ff5e00;}
          50%,100% {background: #000;}
       }
 
-      .port_l_up span:nth-child(1) {background: #ff5e00;}
-      .port_r_up span:nth-child(2) {background: #06ff6e;}
+      .port_l_up span:nth-child(1) {background: #06ff6e;}
+      .port_r_up span:nth-child(2) {background: #ff5e00;}
       .port_r_active span:nth-child(2) {animation: virt_port_anim 200ms steps(1) infinite;}
+
+      .bridge_group {
+         position: relative; 
+         justify-content: center; 
+         display: flex; 
+         flex-wrap: wrap;
+      }
    </style>
 </head>
 
@@ -64,13 +79,29 @@
    <div style="display: flex; flex-direction: column;">
       <label>Left menu</label>
       <button onclick='makeRequest({"action": "init_swc"})'>Загрузить SWC</button>
+      <form action="#" id="form_create_group">
+         <input id="form_create_group_name">
+         <button> Создать группу </button>
+      </form>
+      <form action="#" id="form_remove_group">
+         <select id="form_remove_group_name"></select>
+         <button> Удалить группу </button>
+      </form>
+      <form action="#" id="form_add_port_to_group">
+         <select id="form_add_port_to_group_port"></select>
+         <label> -> </label>
+         <select id="form_add_port_to_group_bridge"></select>
+         <button> Связать </button>
+      </form>
+      <form action="#" id="form_remove_port_from_group">
+         <select id="form_remove_port_from_group_port"></select>
+         <button> Отвязать порт </button>
+      </form>
    </div>
    <div style="display: flex; flex-direction: column; min-width: 50%; max-width: 50%; text-align: center;">
       <label id="board_ports_global_status" style="color: red;"></label>
-      <label>Порты коммутатора</label>
-      <div id="board_ports_internal" style="position: relative; justify-content: center; display: flex; flex-wrap: wrap;"></div>
-      <label>Инородные порты</label>
-      <div id="board_ports_other" style="position: relative; justify-content: center; display: flex; flex-wrap: wrap;"></div>
+      <label>Группы интерфейсов</label>
+      <div id="board_bridges" class="bridge_group" style="flex-direction: column;"></div>
    </div>
    <div style="display: flex; flex-direction: column;">
       <label>Right menu</label>
@@ -82,7 +113,7 @@
 
    function createPort(id, name) {
       let obj = document.createElement("div");
-      obj.id = id;
+      obj.id = "ethernet_port_"+id;
       obj.classList.add("port");
       obj.appendChild(document.createElement("span"));
       obj.appendChild(document.createElement("span"));
@@ -91,13 +122,50 @@
       return obj;
    }
 
-   function recreateVirtualPorts(count) {
-      let ports = document.getElementById("internal_ports")
-      ports.replaceChildren()
-      for (let iter = 0; iter < count; iter++)
-         ports.appendChild(createPort("virt"+iter, "virt"+iter));
+   function addSubmitCallback(form, callback)
+   {
+      let ele = document.getElementById(form);
+      if(ele.addEventListener) {
+         ele.addEventListener("submit", callback, false);  //Modern browsers
+      } else if(ele.attachEvent){
+         ele.attachEvent('onsubmit', callback);            //Old IE
+      }
    }
 
+   addSubmitCallback("form_create_group", function(event) {
+      event.preventDefault();
+
+      var text = document.getElementById('form_create_group_name').value;
+      makeRequest({"action": "create_bridge", "br_name": text});
+   });
+
+   addSubmitCallback("form_remove_group", function(event) {
+      event.preventDefault();
+
+      var input = document.getElementById('form_remove_group_name')
+      var text = input.options[input.selectedIndex].label;
+      makeRequest({"action": "remove_bridge", "br_name": text});
+   });
+
+   addSubmitCallback("form_add_port_to_group", function(event) {
+      event.preventDefault();
+
+      var input = document.getElementById('form_add_port_to_group_port')
+      var port = input.options[input.selectedIndex].label;
+      input = document.getElementById('form_add_port_to_group_bridge')
+      var bridge = input.options[input.selectedIndex].label;
+      makeRequest({"action": "add_port_to_bridge", "port_name": port, "br_name": bridge});
+   });
+
+   addSubmitCallback("form_remove_port_from_group", function(event) {
+      event.preventDefault();
+
+      var input = document.getElementById('form_remove_port_from_group_port')
+      var text = input.options[input.selectedIndex].label;
+      makeRequest({"action": "remove_port_from_bridge", "port_name": text});
+   });
+
+   
    var last_status = false; // Статус сервиса на момент предыдущего запроса
    var last_ports_update_id = 0;
 
@@ -121,8 +189,7 @@
                      if (last_status)
                      {
                         last_status = false;
-                        $("#board_ports_internal").replaceChildren();
-                        $("#board_ports_other").replaceChildren();
+                        $("#board_bridges").replaceChildren();
                      }
 
                      if (result["debug"])
@@ -137,52 +204,102 @@
                      $("#board_ports_global_status").text("");
                   }
 
-                  let internal = document.getElementById("board_ports_internal");
-                  let other = document.getElementById("board_ports_other");
-
                   // Конфигурация портов изменилась
+                  let states = json["states"]; // Состояния интерфейсов
                   if (last_ports_update_id != json["update_id"])
                   {
-                     let states = json["states"];
-                     internal.replaceChildren();
-                     other.replaceChildren();
+                     last_ports_update_id = json["update_id"];
+                     // Обновляем список доступных к объединению портов
+                     let list_internal = document.getElementById("form_add_port_to_group_port");
+                     list_internal.replaceChildren();
+                     let list_bridge = document.getElementById("form_add_port_to_group_bridge");
+                     let list_bridge2 = document.getElementById("form_remove_group_name");
+                     list_bridge.replaceChildren();
+                     list_bridge2.replaceChildren();
+                     let slaved_interfaces = document.getElementById("form_remove_port_from_group_port");
+                     slaved_interfaces.replaceChildren();
 
-                     for (let iter = 0; iter < 24; iter++)
-                        internal.appendChild(createPort("ether"+iter, "ether"+iter));
-
-                     for (const [key, value] of Object.entries(states)) {
-                        let is_internal = key.match("^ether\d+$");
-                        let port;
-                        if (is_internal) {
-                           internal.appendChild(createPort(key, key));
-                           port = internal.lastChild;
+                     // Создаём группы интерфейсов
+                     let groups = json["groups"];
+                     let bridges = document.getElementById("board_bridges");
+                     bridges.replaceChildren();
+                     for (const [key, value] of Object.entries(groups))
+                     {
+                        if(key == "*")
+                        {
+                           // Разгруппированные интерфейсы
+                           value.forEach(function (value) {
+                              let option = document.createElement("option");
+                              option.label = value;
+                              list_internal.appendChild(option);
+                           });
                         } else {
-                           other.appendChild(createPort(key, key));
-                           port = other.lastChild;
+                           // Добавляем интерфейс
+                           let option = document.createElement("option");
+                           option.label = key;
+                           list_bridge.appendChild(option);
+                           list_bridge2.appendChild(option.cloneNode());
                         }
 
-                        if (value) {
-                           port.classList.add("port_l_up");
-                           if (value == 1)
-                              port.classList.add("port_r_up");
-                        }
+                        let object = document.createElement("label");
+                        object.textContent = key;
+                        bridges.appendChild(object);
+
+                        object = document.createElement("div");
+                        object.classList.add("bridge_group");
+                        value.forEach(function (value) {
+                           object.appendChild(createPort(value, value));
+
+                           if(key != "*" && key != value)
+                           {
+                              let option = document.createElement("option");
+                              option.label = value;
+                              slaved_interfaces.appendChild(option);
+                           }
+                        });
+                        bridges.appendChild(object);
                      }
                   }
 
                   // Обновляем активность портов
                   let activity = new Set(json["activity"]);
-                  let lambda = function(value, key) {
-                     if (!value.id)
-                        return;
+                  for (const [key, value] of Object.entries(states)) {
+                     let port = document.getElementById("ethernet_port_"+key);
 
-                     if (activity.has(value.id))
-                        value.classList.add("port_r_active");
+                     if(!port)
+                        continue;
+
+                     if(activity.has(port.id.match("^ethernet_port_(.*)$")[1]))
+                        port.classList.add("port_r_active");
                      else
-                        value.classList.remove("port_r_active");
-                  };
+                        port.classList.remove("port_r_active");
 
-                  internal.childNodes.forEach(lambda);
-                  other.childNodes.forEach(lambda);
+                     is_bridge = false;
+                     state = value;
+
+                     if(state)
+                     {
+                        is_bridge = state & 0b100;
+                        state = state & 0b11;
+                        port.classList.add("port_l_up");
+                     } else {
+                        port.classList.remove("port_l_up");
+                        port.classList.remove("port_r_up");
+                     }
+
+                     if(state == 1)
+                        port.classList.add("port_r_up");
+                     else
+                        port.classList.remove("port_r_up");
+
+                     if(is_bridge) {
+                        port.classList.add("port_bridge");
+                        port.classList.remove("port_internal");
+                     } else{
+                        port.classList.add("port_internal");
+                        port.classList.remove("port_bridge");
+                     }
+                  }
 
                } else {
                   console.log('Error: ${xhr.status} ${xhr.readyState}');
