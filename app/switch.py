@@ -4,23 +4,28 @@ import re
 import pathlib
 import subprocess
 from . import simple_interface
+import hashlib
+import traceback
+import json
 
 SWC = None
 
 class SwitchCore:
     # debug_port - порт, который используется для моста между хостом и виртуальной машиной
-    def __init__(self, debug_port = "enp1s0", virtual_ports = 0):
-        self.is_inited = False
-        self._is_created = False
-        self.need_shutdown = False
-        self.is_alive = True
+    def __init__(self, debug_port = "enp1s0"):
+        self.is_inited = False          # Флаг, отмечающий запуск внутреннего потока  
+        self._is_created = False        # Флаг, отмечающий полное выполнение конструктора
+        self.need_shutdown = False      # Если вызван деструктор, требование к завершению потока
+        self.is_alive = True            # По завершению работы потока ставится в False
         self._mutex = threading.Lock()
         self._config = {}
-        self._last_packets_view = {}
-        self._virtual_ports = virtual_ports
-        self._debug_port = debug_port
-        self._offline_ports = [debug_port, 'lo', 'ovs-system']
-        self._update_id = 2
+        self._debug_port = debug_port           # Интерфейс отладки виртуальной машины
+                        # Интерфейсы, которые не будут использоваться в коммутации 
+        self._excluded_ports = [debug_port, 'lo', 'ovs-system']
+        self._update_id = time.time()*100       # Счётчик обновления конфигурации портов
+        self._last_packets_view = {}            # Последняя активность интерфейсов
+        self._interface_activity = []           # Список активных интерфейсов на момент последней проверки (была обработка пакетов)
+        self._hash_interface_configuration = "" # Хэш последней полученной конфигурации портов
 
         # Удаляем мосты и виртуальные интерфейсы
         #self.splitCommandToTable(self.vsctl(['show']).split('\n'))
@@ -51,7 +56,7 @@ class SwitchCore:
         if not self._is_created:
             return
 
-        for milisecond in range(10000):
+        for milisecond in range(10000): # Ожидаем 10 секунд пока поток не завершит работу
             if not self.is_alive:
                 break
 
@@ -65,248 +70,302 @@ class SwitchCore:
         output = subprocess.Popen(cmd_args, stdout=subprocess.PIPE)
         return output.communicate()[0].decode()
 
+    def cmd_vsctl(self, args = []):
+        return self.run_cmd(['ovs-vsctl'] + args)
+
+    # Сведения о мостах и их портах {"bridge_name": ["port1", "port2"]}
+    def cmd_vsctl_show(self) -> dict:
+        lines = self.cmd_vsctl(['show']).split('\n')
+        lines_next = []
+
+        # f4e57597-4dc4-44c6-bc02-25e09c67157e
+        #     Bridge "Test"
+        #         Port "Test"
+        #             Interface "Test"
+        #                 type: internal
+        #         Port enp9s0
+        #             Interface enp9s0
+        #         Port enp10s0
+        #             Interface enp10s0
+        #     ovs_version: "3.1.0"
+
+        # Избавляемся от первого вложения (f4e57597-4dc4-44c6-bc02-25e09c67157e)
+        for line in lines:
+            if len(line) < 5 or not line.startswith(' '*4):
+                continue
+
+            lines_next.append(line[4:])
+
+        lines = lines_next
+        bridge_lines = {}
+
+        # Считываем верхние группы (Bridge Test)
+        iter = -1
+        while iter < len(lines)-1:
+            iter += 1
+            begin = iter # Позиция начала группы (Bridge Test)
+            while iter < len(lines)-1:
+                iter += 1
+                if lines[iter][0] != ' ': # Нашли новое объявление группы
+                    iter -= 1 # Отступаем, указываем на последнюю строчку группы
+                    break
+
+            if not lines[begin].startswith('Bridge '): # Если эта группа не является объявлением моста (ovs_version: "3.1.0")
+                continue
+
+            bridge = lines[begin][7:] # Название моста
+            if bridge[0] == '"':
+                bridge = bridge[1:-1] # Избавляемся от кавычек
+
+            # Изымаем группу, не включая название моста, с урезанием пробелов
+            bridge_lines[bridge] = [line[4:] for line in lines[begin+1:iter]]
+
+        out = {}
+        # Считываем порты (Port Test)
+        for bridge in bridge_lines:
+
+            # Исключаем не нужные интерфейсы
+            if(bridge in self._excluded_ports):
+                continue
+
+            lines = bridge_lines[bridge]
+            ports = []
+
+            for line in lines:
+                if not line.startswith('Port '):
+                    continue
+
+                line = line[5:]
+                if line[0] == '"': # Избавляемся от кавычек
+                    line = line[1:-1]
+
+                # Исключаем не нужные интерфейсы
+                if(line in self._excluded_ports):
+                    continue
+
+                ports.append(line)
+
+            out[bridge] = ports
+
+        return out
+        
+    # Список портов, подключенных к мостам ["Port1", "Port2"]
+    def cmd_vsctl_show_onlyPorts(self) -> set:
+        bridges = self.cmd_vsctl_show()
+        out = set()
+        for key in bridges:
+            out.add(bridges[key])
+
+        return out
+
+    # Список мостов ["Bridge1", "Bridge2"]
+    def cmd_vsctl_show_onlyBridges(self) -> set:
+        bridges = self.cmd_vsctl_show()
+        out = set()
+        for key in bridges:
+            out.add(key)
+
+        return out
+
 
     def ip(self, args = []):
         return self.run_cmd(['ip'] + args)
 
-
-    def vsctl(self, args = []):
-        return self.run_cmd(['ovs-vsctl'] + args)
-
-
-    def vsctl_get_bridges(self) -> list:
-        bridges = []
-        table = self.splitCommandToTable(self.vsctl(['show']).split('\n'))
-        table = table[next(iter(table))]
-        for key in table:
-            args = key.split(' ')
-            if args[0] != 'Bridge':
-                continue
-
-            br_name = args[1]
-            if br_name[0] == '"':
-                br_name = br_name[1:-1]
-
-            bridges.append(br_name)
-
-        return bridges
-
-
-    def get_allPorts(self) -> list:
+    # Выводит список всех существующих интерфейсов ["Port1", "Port2"]
+    def sys_all_exists_ports(self) -> set:
         ports = set()
         devs = pathlib.Path("/sys/class/net/")
         for dir in devs.iterdir():
-            if(dir.name in self._offline_ports):
+            # Исключаем не нужные порты
+            if(dir.name in self._excluded_ports):
                 continue
 
             ports.add(dir.name)
 
-        devs = self.vsctl_get_bridgedPorts()
+        devs = self.cmd_vsctl_show()
         for key in devs:
-            for port in devs[key]:
-                if(port in self._offline_ports):
-                    continue
+            ports.union(set(devs[key]))
 
-                ports.add(port)
+        return ports
 
 
-        return list(ports)
-
-
-    def vsctl_get_bridgedPorts(self) -> dict:
-        groups = {}
-
-        table = self.splitCommandToTable(self.vsctl(['show']).split('\n'))
-        table = table[next(iter(table))]
-        for key in table:
-            args = key.split(' ')
-            if args[0] != 'Bridge':
-                continue
-
-            bridge = []
-            for port in table[key]:
-                args2 = port.split(' ')
-                if args2[0] != 'Port':
-                    continue
-
-                port_name = args2[1]
-                if port_name[0] == '"':
-                    port_name = port_name[1:-1]
-                    
-                bridge.append(port_name)
-
-            br_name = args[1]
-            if br_name[0] == '"':
-                br_name = br_name[1:-1]
-
-            groups[br_name] = bridge
-
-        return groups
-
-
-    def vsctl_get_freeports(self) -> list:
-        allPort = set(self.get_allPorts())
-        bridged = self.vsctl_get_bridgedPorts()
+    # Возвращает список портов не связанных мостами
+    def cmd_vsctl_get_freeports(self) -> list:
+        allPort = set(self.sys_all_exists_ports())
+        bridged = self.cmd_vsctl_show()
 
         for key in bridged:
             allPort = allPort.difference(set(bridged[key]))
 
         return list(allPort)
 
-
-    def splitCommandToTable(self, lines: list):
-        iter = 0
-        table = {}
-
-        while iter < len(lines):
-            begin = iter
-
-            if len(lines[iter]) == 0:
-                break
-
-            iter += 1
-
-            while iter < len(lines):
-                if len(lines[iter]) == 0 or lines[iter][0] != ' ':
-                    break
-
-                iter += 1
-
-            iter -= 1
-
-            if begin == iter:
-                args = lines[begin].split(': ')
-                if len(args) == 1:
-                    table[lines[begin]] = 'nil'
-                else:
-                    table[args[0]] = args[1]
-            else:
-                subList = lines[begin+1:iter+1]
-                for sub_line in range(len(subList)):
-                    subList[sub_line] = subList[sub_line][4:]
-
-                table[lines[begin]] = self.splitCommandToTable(subList)
-            
-            iter += 1
-            
-        return table
-
-
-    # Возвращает конфигурацию портов и их состояние в виде словаря
-    # { states: {"eth0": 1, "eth1": 0, "eth2": 2}, -- eth0=up, eth1=down, eth2=под влиянием stp
-    #   activity: ["eth0"], -- Если за последнюю секунду был трафик в данном порту
-    #   groups: {"bridge1": ["eth0", "eth1"]}, -- Объединённые интерфейсы
-    #   update_id: 1234567 -- id текущей смены конфигурации портов, увеличивается при переключении состояния портов
-    # }
-    #
-    def get_ports(self) -> dict:
-        activity = []       # Список активных портов
-        states = {}         # Таблица состояний портов
-        groups = {}         # Группы интерфейсов
-        
-        groups = self.vsctl_get_bridgedPorts()
-        groups['*'] = self.vsctl_get_freeports()
-
-        # Считываем кодичество пакетов, прошедших через порты для определения активности
-        lines = open("/proc/net/dev", "r").readlines()[2:]
-        for line in lines:
-            match = re.match(r"^ *([\w\d\-_]+): +\d+ +(\d+)", line)
-            if not match:
-                continue
-
-            dev = match[1]  # Устройство
-            packets = int(match[2]) # Количество пакетов
-
-            # Запись о количестве пакетов порта не найдена, либо количество пакетов изменилось
-            contains = dev in self._last_packets_view
-            if not contains or packets != self._last_packets_view[dev]:
-                if contains:
-                    activity.append(dev)
-
-                self._last_packets_view[dev] = packets
+    # Возвращает текущее состояние портов
+    # {"port1": 1, "port2": 0, "port3": 2} -- eth0=up, eth1=down, eth2=отправка пакетов отключена (learning)
+    def get_interfaces_state(self) -> dict:
+        states = {}
 
         # Сбор информации о состоянии портов
         devs = pathlib.Path("/sys/class/net/")
         for dir in devs.iterdir():
+            name = dir.name
+            if name in self._excluded_ports:
+                continue # Пропускаем не нужные порты
+
             if "down" not in open(dir / "operstate", "r").readline():
-                states[dir.name] = 1   # Порт действует/работает и/или включен
+                states[name] = 1   # Порт действует/работает и/или включен
             else:
-                states[dir.name] = 0   # Порт отключён
+                states[name] = 0   # Порт отключён
 
-            if dir.name in groups:
-                states[dir.name] += 4
+        return states
 
-        for port in self.get_allPorts():
-            if port not in states:
-                states[port] = 0
+    # Возвращает текущую конфигурацию портов
+    # {port1: {state: 1, bridge: ""}} -- bridge - интерфейс моста, если есть
+    def get_interfaces_configuration(self) -> dict:
+        configuration = self.get_interfaces_state()
+        bridges_groups = self.cmd_vsctl_show()
 
-        # Если найдётся запись о количестве пакетов для несуществующего порта, то она будет удалена
-        to_delete = []
-        for iter in self._last_packets_view:
-            if iter not in states:
-                to_delete.append(iter)
+        ports = configuration.keys()
+        for port in ports:
+            configuration[port] = {"state": configuration[port]} # Переносим состояние в переменную
 
-        for iter in to_delete:
-            del self._last_packets_view[iter]
+            # Находим какому мосту принадлежит порт
+            for bridge in bridges_groups:
+                if port in bridges_groups[bridge]:
+                    configuration[port]["bridge"] = bridge
+                    break
 
-        for key in self._offline_ports:
-            if key in states:
-                del states[key]
-            if(key in activity):
-                activity.remove(key)
+        # Если хеш не сошёлся не сошёлся, значит конфигурация изменилась
+        hash = self.md5(json.dumps(configuration).encode())
+        if self._hash_interface_configuration != hash: 
+            self._hash_interface_configuration = hash
+            self._update_id += 1
 
-        return simple_interface.create_result({"update_id": self._update_id, "states": states, "groups": groups, "activity": activity})
+        return configuration
+        
+    # Возвращает конфигурацию портов и их состояние в виде словаря
+    # { configuration: {} -- Если update_id клиента просрочен
+    #   groups: {"bridge1": ["eth0", "eth1"]}, -- Объединённые интерфейсы
+    #
+    #   activity: ["eth0"], -- Интерфейсы на которых недавно проходил трафик
+    #   update_id: 1234567 -- id текущей смены конфигурации портов, увеличивается при изменении состояния портов
+    # }
+    def get_ports(self, client_update_id: int) -> dict:
+        out = {"update_id": self._update_id, "activity": self._interface_activity}
+
+        if self._update_id != client_update_id:
+            out["configuration"] = self.get_interfaces_configuration()
+            out["groups"] = self.cmd_vsctl_show()
+            out["groups"]["*"] = self.cmd_vsctl_get_freeports()
+
+        return simple_interface.create_result(out)
 
     # Создать группу
     def create_bridge(self, br_name: str):
-        bridges = self.vsctl_get_bridges()
-        if br_name in bridges or br_name in self._offline_ports:
+        bridges = self.cmd_vsctl_show_onlyBridges()
+        if br_name in bridges:
             return simple_interface.create_error(f'Имя нового моста пересекается с существующим: {br_name}')
 
-        out = self.vsctl(['add-br', br_name])
+        if not self.isValidInterfaceName(br_name):
+            return simple_interface.create_error(f'Имя нового моста недопустимо: {br_name}')
+
+        out = self.cmd_vsctl(['add-br', br_name])
         self._update_id += 1
 
         return simple_interface.create_result({})
 
     # Удалить группу
     def remove_bridge(self, br_name: str):
-        bridges = self.vsctl_get_bridges()
-        if br_name not in bridges or br_name in self._offline_ports:
+        bridges = self.cmd_vsctl_show_onlyBridges()
+        if br_name not in bridges or br_name in self._excluded_ports:
             return simple_interface.create_error(f'Мост не существует: {br_name}')
 
-        out = self.vsctl(['del-br', br_name])
+        out = self.cmd_vsctl(['del-br', br_name])
         self._update_id += 1
 
         return simple_interface.create_result({})
 
     # Добавить порт в группу
     def add_port_to_bridge(self, port_name: str, br_name: str):
-        ports = self.vsctl_get_freeports()
-        bridges = self.vsctl_get_bridges()
+        ports = self.cmd_vsctl_get_freeports()
+        bridges = self.cmd_vsctl_show_onlyBridges()
 
-        if port_name not in ports or port_name in self._offline_ports:
+        if port_name not in ports or port_name in self._excluded_ports:
             return simple_interface.create_error(f'Порт не может быть сгруппирован, он занят: {port_name}')
 
         if br_name not in bridges:
             return simple_interface.create_error(f'Порт не добавлен, группа отсутствует: {br_name}')
 
-        out = self.vsctl(['add-port', br_name, port_name])
+        out = self.cmd_vsctl(['add-port', br_name, port_name])
         self._update_id += 1
 
         return simple_interface.create_result({})
 
     # Удалить порт из группы
     def remove_port_from_bridge(self, port_name: str):
-        ports = self.vsctl_get_freeports()
+        ports = self.cmd_vsctl_get_freeports()
 
-        if port_name in ports or port_name in self._offline_ports:
+        if port_name in ports or port_name in self._excluded_ports:
             return simple_interface.create_error(f'Порт не находится в группе: {port_name}')
 
-        self.vsctl(['del-port', port_name])
+        self.cmd_vsctl(['del-port', port_name])
         self._update_id += 1
 
         return simple_interface.create_result({})
 
+    def md5(self, data: str):
+        sha = hashlib.md5(data)
+        return sha.hexdigest()
+
+    def isValidInterfaceName(self, name: str):
+        return re.match(r'^[\w\d_]{,16}$', name) and name not in self._excluded_ports
+
+    # Проверка активности интерфейсов
+    def _check_interface_activity(self):
+        activity = []
+        last_activity = self._last_packets_view
+
+        # Считываем количество пакетов, прошедших через порты для определения активности
+
+        #Inter-|   Receive                                                |  Transmit
+        # face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+        #    lo:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+        #enp1s0: 22487403  131264 9941    0    0  9941          0         0 20831652  124711    0    0    0     0       0          0
+
+        lines = open("/proc/net/dev", "r").readlines()[2:]
+        devs = set()
+        for line in lines:
+            match = re.match(r"^ *([\w\d\-_]+): +\d+ +(\d+)", line)
+            if not match:
+                continue
+
+            dev = match[1]  # Устройство
+
+            if dev in self._excluded_ports:
+                continue # Пропускаем не нужные порты
+
+            devs.add(dev)
+            packets = int(match[2]) # Количество пакетов
+
+            # Запись о количестве пакетов порта не найдена, либо количество пакетов изменилось
+            contains = dev in last_activity
+            if not contains or packets != last_activity[dev]:
+                if contains:
+                    activity.append(dev)
+
+                last_activity[dev] = packets
+
+        # Если найдётся запись о количестве пакетов для несуществующего порта, то она будет удалена
+        to_delete = []
+        for iter in last_activity:
+            if iter not in devs:
+                to_delete.append(iter)
+
+        # Удаляем отсутствующие порты
+        for iter in to_delete:
+            del last_activity[iter]
+
+        self._last_packets_view = last_activity
+        self._interface_activity = activity
 
     # Функция рабочего потока
     def _run(self):
@@ -316,6 +375,12 @@ class SwitchCore:
             time.sleep(1)
             if self.need_shutdown:
                 break
+
+            try:
+                self._check_interface_activity()
+                self.get_interfaces_configuration() # Проверка текущей конфигурации устройств
+            except Exception as exc:
+                print(str(exc) + '\n' + traceback.format_exc())
 
         self.is_alive = False
 

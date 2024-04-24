@@ -74,7 +74,7 @@
    </style>
 </head>
 
-<body>
+<body style="background-color: gray">
    <div style="display: flex; justify-content: space-around;">
    <div style="display: flex; flex-direction: column;">
       <label>Left menu</label>
@@ -189,7 +189,7 @@
                      if (last_status)
                      {
                         last_status = false;
-                        $("#board_bridges").replaceChildren();
+                        document.getElementById("board_bridges").replaceChildren();
                      }
 
                      if (result["debug"])
@@ -205,10 +205,11 @@
                   }
 
                   // Конфигурация портов изменилась
-                  let states = json["states"]; // Состояния интерфейсов
+                  let configuration = json["configuration"]; // Состояния интерфейсов
                   if (last_ports_update_id != json["update_id"])
                   {
                      last_ports_update_id = json["update_id"];
+
                      // Обновляем список доступных к объединению портов
                      let list_internal = document.getElementById("form_add_port_to_group_port");
                      list_internal.replaceChildren();
@@ -263,7 +264,7 @@
 
                   // Обновляем активность портов
                   let activity = new Set(json["activity"]);
-                  for (const [key, value] of Object.entries(states)) {
+                  for (const [key, value] of Object.entries(configuration)) {
                      let port = document.getElementById("ethernet_port_"+key);
 
                      if(!port)
@@ -274,8 +275,8 @@
                      else
                         port.classList.remove("port_r_active");
 
-                     is_bridge = false;
-                     state = value;
+                     is_bridge = value.bridge == key;
+                     state = value.state;
 
                      if(state)
                      {
@@ -306,7 +307,7 @@
                }
             };
 
-            xhr.send(JSON.stringify({"action": "get_port_configuration"}));
+            xhr.send(JSON.stringify({"action": "get_port_configuration", "update_id": last_ports_update_id}));
 
             refreshSn();
          },

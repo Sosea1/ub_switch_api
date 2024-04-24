@@ -108,7 +108,11 @@ def web_apiV0():
 
         match action:
             case "get_port_configuration":
-                return switch.SWC.get_ports()
+                client_update_id = json.get("update_id")
+                if not client_update_id and type(client_update_id) != int:
+                    return create_error('Отсутствует параметр update_id')
+
+                return switch.SWC.get_ports(int(client_update_id))
 
             case "create_bridge":
                 br_name = json.get("br_name")
@@ -152,5 +156,5 @@ def web_action_init_swc():
     if switch.SWC:
         return create_error("Уже инициализировано")
 
-    switch.SWC = switch.SwitchCore(virtual_ports=24)
+    switch.SWC = switch.SwitchCore()
     return create_result("Будет сделано")
