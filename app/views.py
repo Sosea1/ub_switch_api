@@ -436,3 +436,146 @@ def route_port_security_del_static():
         command = "nft add rule ip port_security input iif {} accept".format(interface)
         execute_bash_command(command)
         return "Port Security disabled for interface {}".format(interface)
+
+@webapi.route("/dos/sysctl/get",methods=['GET'])
+def dos_sysctl_get():
+    path = "/etc/sysctl.conf"
+    if os.path.isfile(path):
+        res={}
+        with open(path, 'r') as f:
+            for line in f:
+                if not line.startswith('#'):
+                    res.update({line.split('=')[0]: line.split('=')[1].strip()})
+            return res
+            
+    else: return 'error'
+
+@webapi.route("/dos/sysctl/change",methods=['POST'])
+def dos_sysctl_change(): 
+    path = "/etc/sysctl.conf"
+    if os.path.isfile(path):
+        res=[]
+        with open(path, 'r') as f:
+            in_file = f.readlines()
+
+        settings_dict = {line.split('=')[0]: line.split('=')[1].strip() for line in in_file if '=' in line}
+        
+        data = request.get_json()
+        to_write = []
+        for key, value in data.items():
+            
+            res=''
+            val=''
+            if str(key) in ['net.ipv4.conf.rp_filter', 'net.ipv4.conf.accept_redirects' , 'net.ipv4.conf.secure_redirects']:
+                
+                for in_key, in_value in value.items():
+                
+                    if str(in_key)=='interface':
+                        
+                        tmp=str(key)
+                        tmp = str(tmp).split('.')
+                        tmp.insert(3, in_value)
+                        res='.'.join(tmp)+res
+
+                    if str(in_key)=='value':
+                        val=in_value
+
+                    if len(res)>0 and len(val)>0: settings_dict.update({res:val})
+                
+            elif str(key) in ['net.ipv4.icmp_echo_ignore_broadcasts', 'net.ipv4.icmp_ignore_bogus_error_responses', 'net.ipv4.icmp_echo_ignore_all', 'net.ipv4.tcp_syncookies', 'net.ipv4.tcp_max_syn_backlog', 'net.ipv4.tcp_synack_retries', 'net.ipv4.tcp_rfc1337', 'net.core.netdev_max_backlog', 'net.ipv4.tcp_keepalive_probes', 'net.ipv4.tcp_keepalive_intvl', 'net.ipv4.tcp_keepalive_time']:
+                    for in_key, in_value in value.items():
+                        if str(in_key)=='value':
+                            settings_dict.update({key:in_value})
+                
+        with open(path, 'w') as f:                
+            updated_settings = [f"{key}={value}\n" for key, value in settings_dict.items()]    
+            f.writelines(updated_settings)
+
+    return to_write
+                
+
+
+# -----------------DOS---------------------------------------------------------------
+# -----1------
+# net.ipv4.conf.all.rp_filter=1
+# sysctl -w net.ipv4.conf.eth0.rp_filter=1
+# ----Параметр который включает фильтр обратного пути, проще говоря активируется защита от подмены адресов (спуфинга).
+# ---0-выкл, 1-вкл, 2-вкл(свободный режим проверки).
+
+# -----2------
+# sysctl -w net.ipv4.icmp_echo_ignore_broadcasts=1
+
+# ----Отключаем ответ на ICMP ECHO запросы, переданные широковещательными пакетами
+# ---0-выкл, 1-вкл
+
+# -----3------
+# sysctl -w net.ipv4.icmp_ignore_bogus_error_responses=1
+
+# ----Игнорируем ошибочные ICMP запросы.
+# ---0-выкл, 1-вкл
+
+# -----4------
+# sysctl -w net.ipv4.icmp_echo_ignore_all=1
+
+# ----Отключаем ответ на ICMP запросы (сервер не будет пинговаться).
+# ---0-выкл, 1-вкл
+
+# -----5------
+# sysctl -w net.ipv4.tcp_syncookies=0
+
+# ----По умолчанию данный параметр обычно включен. Если количество SYN пакетов забивает всю очередь, включается механизм Syn cookies.
+# ---0-выкл, 1-вкл
+
+# -----6------
+# sysctl -w net.ipv4.tcp_max_syn_backlog=4096
+
+# ----Параметр, который определяет максимальное число запоминаемых запросов на соединение, для которых не было получено подтверждения от подключающегося клиента (полуоткрытых соединений).
+# ---от 0 до много
+
+# -----7------
+# sysctl -w net.ipv4.tcp_synack_retries=1
+
+# ----Время удержания «полуоткрытых» соединений.
+# ---по умолчанию 5
+
+# -----8------
+# sysctl -w net.ipv4.tcp_max_orphans=65536
+
+# ----Определяет максимальное число «осиротевших» TCP пакетов.
+# ---по умолчанию 262144
+
+# -----9------
+# sysctl -w net.ipv4.tcp_fin_timeout=10
+
+# ----Время ожидания приема FIN до полного закрытия сокета.
+# ---по умолчанию 60
+
+# -----10------
+# sysctl -w net.ipv4.tcp_keepalive_time=60
+
+# ----Проверять TCP-соединения, с помощью которой можно убедиться в том что на той стороне легальная машина, так как она сразу ответит..
+# ---по умолчанию 7200 (2 часа), лучше уменьшить это время
+
+# -----11------
+# sysctl -w net.ipv4.tcp_keepalive_intvl=15
+
+# ----Интервал подачи проб.
+# ---по умолчанию 75
+
+# -----12------
+# sysctrl -w net.ipv4.tcp_keepalive_probes=5
+
+# ----Количество проверок перед закрытием соединения..
+# ---по цмолчанию 9 попыток
+
+# -----13------
+# sysctl -w net.core.netdev_max_backlog=1000
+
+# ----Параметр определяет максимальное количество пакетов в очереди на обработку, если интерфейс получает пакеты быстрее, чем ядро может их обработать..
+# ---по умолчанию 1000
+
+# -----14------
+# sysctl -w net.ipv4.tcp_rfc1337=1
+
+# ----С помощью этой опции мы можем защитить себя от TIME_WAIT атак.
+# ---0-выкл, 1-вкл
