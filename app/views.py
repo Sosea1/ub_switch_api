@@ -291,87 +291,148 @@ def route_nft_dhcp_snooping_remove():
     return "address added"
 
 
-#--------------PORT SECURITY--------------------
-@webapi.route("/port-security/enable")
-def route_port_security_enable():
+
+#--------------DAI--------------------
+@webapi.route("/arp/limit")
+def route_arp_limit():
+    interface = request.args.get('int')
+    if interface is None:
+        return "specify interface"
+    limit = ""
+    limit_number = request.args.get('limit')
+    if limit_number:
+        limit = "limit rate {}/second".format(limit_number)
+    else:
+        return "specify limit rate"
     json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
     if json_ruleset.returncode != 0:
         return "The command failed with return code:\n"+json_ruleset.returncode
     json_ruleset = json.loads(json_ruleset.stdout)
     nftables = nft_to_normal_json(json_ruleset)
-    if "table-port_security" not in nftables["data"]:
+    if "table-ARP" not in nftables["data"]:
         script = []
+        script.append("nft add table arp ARP")
+        script.append("nft add chain arp ARP input { type filter hook input priority 0 \; policy accept \;}")
+        script.append("nft add rule arp ARP input arp operation request iif {} {} counter accept".format(interface, limit))
+        script.append("nft add rule arp ARP input arp operation reply iif {} {} counter accept".format(interface, limit))
+        execute_bash_script(script)
+    #print(json.dumps(json_ruleset, indent=4))
+    return "DAI enabled for interface {}".format(interface)
+
+@webapi.route("/arp/entry")
+def route_arp_entry():
+    ip = request.args.get('ip')
+    if ip is None:
+        return "specify ip address"
+    mac = request.args.get('mac')
+    if mac is None:
+        return "specify mac address"
+
+    command = "arp -s {} {}".format(ip, mac)
+    execute_bash_command(command)
+    return "static for ip address = {} and mac address = {} entry added".format(ip, mac)
+
+
+
+#--------------PORT SECURITY--------------------
+@webapi.route("/port-security/create")
+def route_port_security_create():
+    json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
+    if json_ruleset.returncode != 0:
+        return "The command failed with return code:\n"+json_ruleset.returncode
+    json_ruleset = json.loads(json_ruleset.stdout)
+    nftables = nft_to_normal_json(json_ruleset)
+    script = []
+    if "table-port_security" not in nftables["data"]:
         script.append("nft add table ip port_security")
         script.append("nft add chain ip port_security input { type filter hook input priority 0 \; }")
         script.append("nft add chain ip port_security forward { type filter hook forward priority 0 \; }")
         execute_bash_script(script)
-    #print(json.dumps(json_ruleset, indent=4))
     return "PORT SECURITY enabled"
 
-@webapi.route("/port-security/disable")
-def route_port_security_disable():
+
+@webapi.route("/port-security/add-static")
+def route_port_security_add_static():
     json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
     if json_ruleset.returncode != 0:
         return "The command failed with return code:\n"+json_ruleset.returncode
     json_ruleset = json.loads(json_ruleset.stdout)
     nftables = nft_to_normal_json(json_ruleset)
     if "table-port_security" not in nftables["data"]:
-        script = []
-        script.append("nft delete table ip port_security")
-        execute_bash_script(script)
-    #print(json.dumps(json_ruleset, indent=4))
-    return "PORT SECURITY enabled"
-
-@webapi.route("/port_security/static")
-def route_port_security_static():
-    json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
-    if json_ruleset.returncode != 0:
-        return "The command failed with return code:\n"+json_ruleset.returncode
-    json_ruleset = json.loads(json_ruleset.stdout)
-    nftables = nft_to_normal_json(json_ruleset)
-    if "table-port_security" not in nftables["data"]:
-        return "PORT SECURITY not enabled. \n Use route '/port-security/enable' to enable PORT SECURITY"
+        route_port_security_create()
     interface = request.args.get('interface')
     mac_address = request.args.get('mac_address')
     if interface == None:
         return "You must specify the interface"
-        
-    command = "nft add rule ip port_security input iif {} ether saddr != {} drop".format(interface, mac_address)
-    execute_bash_command(command)
     
-    return "Rule added"
+    number_rules = 0
+    try:
+        number_rules = nftables["data"]["table-port_security"]["chain-input"]["count-rule"]
+    except: 
+        pass
+    
+    if number_rules >= 1:
+            rule = "rule-"+str(number_rules)
+            handle = nftables["data"]["table-port_security"]["chain-input"][rule]["handle"]
+            command = "nft delete rule ip port_security input handle {}".format(handle)
+            execute_bash_command(command)
+    
+    if mac_address:
+        command = "nft add rule ip port_security input iif {} ether saddr {} accept".format(interface, mac_address)
+        execute_bash_command(command)
+        command = "nft add rule ip port_security input iif {} drop".format(interface)
+        execute_bash_command(command)
+        return "Rule added for interface {} with MAC {}".format(interface, mac_address)
+    
+    else:
+        command = "nft add rule ip port_security input iif {} drop".format(interface)
+        execute_bash_command(command)
+        return "Port Security enabled for interface {}".format(interface)
+    
+    
 
-@webapi.route("/port_security/sticky")
-def route_port_security_sticky():
+
+
+@webapi.route("/port-security/del-static")
+def route_port_security_del_static():
     json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
     if json_ruleset.returncode != 0:
         return "The command failed with return code:\n"+json_ruleset.returncode
     json_ruleset = json.loads(json_ruleset.stdout)
     nftables = nft_to_normal_json(json_ruleset)
     if "table-port_security" not in nftables["data"]:
-        return "PORT SECURITY not enabled. \n Use route '/port-security/enable' to enable PORT SECURITY"
+        route_port_security_create()
     interface = request.args.get('interface')
     mac_address = request.args.get('mac_address')
-    action = request.args.get('action')
     if interface == None:
         return "You must specify the interface"
-        
-    if action is None:      
-        command = "nft add rule ip port_security input iif {} ether saddr != {} drop".format(interface, mac_address, action)
-        execute_bash_command(command)
-        
-    else:      
-        command = "nft add rule ip port_security input iif {} ether saddr {} {}".format(interface, mac_address, action)
-        execute_bash_command(command)
-
     
-    return "Rule added"
+    number_rules = 0
+    try:
+        number_rules = nftables["data"]["table-port_security"]["chain-input"]["count-rule"]
+    except: 
+        pass
 
-@webapi.route("/port_security/violation")
-def route_nft_port_security_violation():
-    interface = request.args.get('interface')
-    action = request.args.get('action')
-
-    # action == Protect or Restrict or Shutdown
-    
-    return "Не реализовано пока"
+    if mac_address:
+        if number_rules >= 1:
+            for i in range(1,number_rules):
+                rule = "rule-"+str(i)
+                _interface = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][0]["match"]["right"]
+                if _interface != interface:
+                    continue
+                _mac = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][1]["match"]["right"]
+                if _mac != mac_address:
+                    continue
+                handle = nftables["data"]["table-port_security"]["chain-input"][rule]["handle"]
+                command = "nft delete rule ip port_security input handle {}".format(handle)
+                execute_bash_command(command)
+        return "Rule deleted for interface {} for MAC {}".format(interface, mac_address)
+                
+    else:
+        rule = "rule-"+str(number_rules)
+        handle = nftables["data"]["table-port_security"]["chain-input"][rule]["handle"]
+        command = "nft delete rule ip port_security input handle {}".format(handle)
+        execute_bash_command(command)
+        command = "nft add rule ip port_security input iif {} accept".format(interface)
+        execute_bash_command(command)
+        return "Port Security disabled for interface {}".format(interface)

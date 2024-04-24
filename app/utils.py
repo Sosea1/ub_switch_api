@@ -105,6 +105,7 @@ def nft_to_normal_json(json_ruleset):
             number += 1
             rule_name = "rule-"+str(number)
             nftables["data"][table_name][chain_name].update({rule_name : value["rule"]})
+            nftables["data"][table_name][chain_name].update({"count-rule" : number})
             
     return nftables
     
