@@ -3,6 +3,7 @@ from flask import request, send_from_directory, make_response
 from enum import Enum
 from . import switch
 import traceback
+import re
 
 class Flags(Enum):
     SWC_NOT_INITIALIZED = 1,
@@ -143,6 +144,35 @@ def web_apiV0():
                     return create_error('Отсутствует параметр port_name')
 
                 return switch.SWC.remove_port_from_bridge(port_name)
+
+            case "vlan_port_set_untagged":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                tag = json.get("tag")
+                if not tag:
+                    return create_error('Отсутствует параметр tag')
+
+                return switch.SWC.vlan_set_access_tag(port_name, int(tag))
+
+            case "vlan_port_set_tagged":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                tag = json.get("tag")
+                if not tag:
+                    return create_error('Отсутствует параметр tag')
+
+                return switch.SWC.vlan_set_trunk_tags(port_name, [int(iter) for iter in re.findall(r'(\d+)', tag)])
+
+            case "vlan_port_clear_tag":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.vlan_set_untagged_native(port_name)
 
             case _:
                 return create_error('Отсутствует обработчик для запроса action='+action)

@@ -67,8 +67,8 @@ class SwitchCore:
             
 
     def run_cmd(self, cmd_args = []):
-        output = subprocess.Popen(cmd_args, stdout=subprocess.PIPE)
-        return output.communicate()[0].decode()
+        output = subprocess.Popen(cmd_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return output.communicate()[0].decode()+output.communicate()[1].decode()
 
     def cmd_vsctl(self, args = []):
         return self.run_cmd(['ovs-vsctl'] + args)
@@ -81,6 +81,7 @@ class SwitchCore:
         # f4e57597-4dc4-44c6-bc02-25e09c67157e
         #     Bridge "Test"
         #         Port "Test"
+        #             tag: 6
         #             Interface "Test"
         #                 type: internal
         #         Port enp9s0
@@ -96,29 +97,33 @@ class SwitchCore:
 
             lines_next.append(line[4:])
 
-        lines = lines_next
-        bridge_lines = {}
-
         # Считываем верхние группы (Bridge Test)
-        iter = -1
-        while iter < len(lines)-1:
-            iter += 1
-            begin = iter # Позиция начала группы (Bridge Test)
+        def read_sub_groups(lines, group_name):
+            group_name += ' '
+            iter = -1
+            group_lines = {}
             while iter < len(lines)-1:
                 iter += 1
-                if lines[iter][0] != ' ': # Нашли новое объявление группы
-                    iter -= 1 # Отступаем, указываем на последнюю строчку группы
-                    break
+                begin = iter # Позиция начала группы (Bridge Test)
+                while iter < len(lines)-1:
+                    iter += 1
+                    if lines[iter][0] != ' ': # Нашли новое объявление группы
+                        iter -= 1 # Отступаем, указываем на последнюю строчку группы
+                        break
 
-            if not lines[begin].startswith('Bridge '): # Если эта группа не является объявлением моста (ovs_version: "3.1.0")
-                continue
+                if not lines[begin].startswith(group_name): # Если эта группа не является объявлением моста (ovs_version: "3.1.0")
+                    continue
 
-            bridge = lines[begin][7:] # Название моста
-            if bridge[0] == '"':
-                bridge = bridge[1:-1] # Избавляемся от кавычек
+                bridge = lines[begin][len(group_name):] # Название моста
+                if bridge[0] == '"':
+                    bridge = bridge[1:-1] # Избавляемся от кавычек
 
-            # Изымаем группу, не включая название моста, с урезанием пробелов
-            bridge_lines[bridge] = [line[4:] for line in lines[begin+1:iter]]
+                # Изымаем группу, не включая название моста, с урезанием пробелов
+                group_lines[bridge] = [line[4:] for line in lines[begin+1:iter+1]]
+
+            return group_lines
+
+        bridge_lines = read_sub_groups(lines_next, 'Bridge')
 
         out = {}
         # Считываем порты (Port Test)
@@ -129,21 +134,28 @@ class SwitchCore:
                 continue
 
             lines = bridge_lines[bridge]
+            port_lines = read_sub_groups(lines, 'Port')
+
             ports = []
 
-            for line in lines:
-                if not line.startswith('Port '):
-                    continue
-
-                line = line[5:]
-                if line[0] == '"': # Избавляемся от кавычек
-                    line = line[1:-1]
-
+            for port_config_key in port_lines:
                 # Исключаем не нужные интерфейсы
-                if(line in self._excluded_ports):
+                if(port_config_key in self._excluded_ports):
                     continue
 
-                ports.append(line)
+                port_config_lines = port_lines[port_config_key]
+                port_config_out = {"name": port_config_key}
+
+                for line in port_config_lines:
+                    reg = re.match(r'^tag: (\d+)$', line)
+                    if reg:
+                        port_config_out['vlan_access'] = reg[1]
+
+                    reg = re.match(r'^trunks: \[(.*)\]$', line)
+                    if reg:
+                        port_config_out['vlan_trunks'] = [int(tag) for tag in reg[1].split(', ')]
+
+                ports.append(port_config_out)
 
             out[bridge] = ports
 
@@ -154,7 +166,8 @@ class SwitchCore:
         bridges = self.cmd_vsctl_show()
         out = set()
         for key in bridges:
-            out.add(bridges[key])
+            for port in bridges[key]:
+                out.add(port['name'])
 
         return out
 
@@ -184,7 +197,7 @@ class SwitchCore:
 
         devs = self.cmd_vsctl_show()
         for key in devs:
-            ports.union(set(devs[key]))
+            ports.union(set([iter['name'] for iter in devs[key]]))
 
         return ports
 
@@ -195,7 +208,7 @@ class SwitchCore:
         bridged = self.cmd_vsctl_show()
 
         for key in bridged:
-            allPort = allPort.difference(set(bridged[key]))
+            allPort = allPort.difference(set([iter['name'] for iter in bridged[key]]))
 
         return list(allPort)
 
@@ -230,9 +243,10 @@ class SwitchCore:
 
             # Находим какому мосту принадлежит порт
             for bridge in bridges_groups:
-                if port in bridges_groups[bridge]:
-                    configuration[port]["bridge"] = bridge
-                    break
+                for iter in bridges_groups[bridge]:
+                    if iter['name'] == port:
+                        configuration[port]["bridge"] = bridge
+                        break
 
         # Если хеш не сошёлся не сошёлся, значит конфигурация изменилась
         hash = self.md5(json.dumps(configuration).encode())
@@ -255,7 +269,7 @@ class SwitchCore:
         if self._update_id != client_update_id:
             out["configuration"] = self.get_interfaces_configuration()
             out["groups"] = self.cmd_vsctl_show()
-            out["groups"]["*"] = self.cmd_vsctl_get_freeports()
+            out["groups"]["*"] = [{"name": iter} for iter in self.cmd_vsctl_get_freeports()]
 
         return simple_interface.create_result(out)
 
@@ -268,7 +282,9 @@ class SwitchCore:
         if not self.isValidInterfaceName(br_name):
             return simple_interface.create_error(f'Имя нового моста недопустимо: {br_name}')
 
-        out = self.cmd_vsctl(['add-br', br_name])
+        output = self.cmd_vsctl(['add-br', br_name])
+        if len(output) > 0:
+            return simple_interface.create_error(output)
         self._update_id += 1
 
         return simple_interface.create_result({})
@@ -279,7 +295,9 @@ class SwitchCore:
         if br_name not in bridges or br_name in self._excluded_ports:
             return simple_interface.create_error(f'Мост не существует: {br_name}')
 
-        out = self.cmd_vsctl(['del-br', br_name])
+        output = self.cmd_vsctl(['del-br', br_name])
+        if len(output) > 0:
+            return simple_interface.create_error(output)
         self._update_id += 1
 
         return simple_interface.create_result({})
@@ -295,7 +313,9 @@ class SwitchCore:
         if br_name not in bridges:
             return simple_interface.create_error(f'Порт не добавлен, группа отсутствует: {br_name}')
 
-        out = self.cmd_vsctl(['add-port', br_name, port_name])
+        output = self.cmd_vsctl(['add-port', br_name, port_name])
+        if len(output) > 0:
+            return simple_interface.create_error(output)
         self._update_id += 1
 
         return simple_interface.create_result({})
@@ -307,10 +327,51 @@ class SwitchCore:
         if port_name in ports or port_name in self._excluded_ports:
             return simple_interface.create_error(f'Порт не находится в группе: {port_name}')
 
-        self.cmd_vsctl(['del-port', port_name])
+        output = self.cmd_vsctl(['del-port', port_name])
+        if len(output) > 0:
+            return simple_interface.create_error(output)
         self._update_id += 1
 
         return simple_interface.create_result({})
+
+    # Задание access тэга
+    def vlan_set_access_tag(self, port: str, tag: int):
+        bridget_ports = self.cmd_vsctl_show_onlyPorts()
+        if port not in bridget_ports or port in self._excluded_ports:
+            return simple_interface.create_error(f'Порт не существует или не находится в мосте: {port}')
+
+        output = self.cmd_vsctl(['set', 'port', port, f'tag={int(tag)}'])
+        if len(output) > 0:
+            return simple_interface.create_error(output)
+        self._update_id += 1
+        return simple_interface.create_result({})
+
+    # Задание транков
+    def vlan_set_trunk_tags(self, port: str, tags: list):
+        bridget_ports = self.cmd_vsctl_show_onlyPorts()
+        if port not in bridget_ports or port in self._excluded_ports:
+            return simple_interface.create_error(f'Порт не существует или не находится в мосте: {port}')
+
+        trunks = ','.join([str(int(iter)) for iter in tags])
+        output = self.cmd_vsctl(['set', 'port', port, f'trunk={trunks}'])
+        if len(output) > 0:
+            return simple_interface.create_error(output)
+        self._update_id += 1
+        return simple_interface.create_result({})
+
+    # Убрать VLan с порта
+    def vlan_set_untagged_native(self, port: str):
+        bridget_ports = self.cmd_vsctl_show_onlyPorts()
+        if port not in bridget_ports or port in self._excluded_ports:
+            return simple_interface.create_error(f'Порт не существует или не находится в мосте: {port}')
+        
+        output = self.cmd_vsctl(['set', 'clear', 'port', port, 'tag', 'trunk'])
+        if len(output) > 0:
+            return simple_interface.create_error(output)
+
+        self._update_id += 1
+        return simple_interface.create_result({})
+
 
     def md5(self, data: str):
         sha = hashlib.md5(data)
