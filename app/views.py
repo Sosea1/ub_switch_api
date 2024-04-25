@@ -1,16 +1,17 @@
 import subprocess
 from app import webapi
 import json
-from flask import render_template, request, redirect, url_for, flash, make_response, session
+from flask import jsonify, render_template, request, redirect, url_for, flash, make_response, session
 # from .models import User, Post, Category, Feedback, db
 # from .forms import ContactForm, LoginForm
-from .utils import makeRequest, parse_to_json, nft_to_normal_json, execute_bash_script, execute_bash_command
+from .utils import get_all_ports, makeRequest, parse_to_json, nft_to_normal_json, execute_bash_script, execute_bash_command
 try:
     from ovs_vsctl import VSCtl, parser
 except Exception as exc:
     print("Отсутствует модуль ovs_vsctl: " + str(exc))
 from app import vsctl
 import os.path
+from .dataclasses.port_security import ps_ports
 
 
 @webapi.route("/")
@@ -351,8 +352,9 @@ def route_port_security_create():
     return "PORT SECURITY enabled"
 
 
-@webapi.route("/port-security/add-static")
+@webapi.route("/port-security/add-static", methods = ['POST'])
 def route_port_security_add_static():
+    data = request.get_json()
     json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
     if json_ruleset.returncode != 0:
         return "The command failed with return code:\n"+json_ruleset.returncode
@@ -360,10 +362,13 @@ def route_port_security_add_static():
     nftables = nft_to_normal_json(json_ruleset)
     if "table-port_security" not in nftables["data"]:
         route_port_security_create()
-    interface = request.args.get('interface')
-    mac_address = request.args.get('mac_address')
+    interface = data['interface']
+    try:
+        mac_address = data['mac_address']
+    except:
+        mac_address = None
     if interface == None:
-        return "You must specify the interface"
+        return jsonify("You must specify the interface")
     
     number_rules = 0
     try:
@@ -382,19 +387,20 @@ def route_port_security_add_static():
         execute_bash_command(command)
         command = "nft add rule ip port_security input iif {} drop".format(interface)
         execute_bash_command(command)
-        return "Rule added for interface {} with MAC {}".format(interface, mac_address)
+        return jsonify("Rule added for interface {} with MAC {}".format(interface, mac_address))
     
     else:
         command = "nft add rule ip port_security input iif {} drop".format(interface)
         execute_bash_command(command)
-        return "Port Security enabled for interface {}".format(interface)
+        return jsonify("Port Security enabled for interface {}".format(interface))
     
     
 
 
 
-@webapi.route("/port-security/del-static")
+@webapi.route("/port-security/del-static", methods = ['DELETE'])
 def route_port_security_del_static():
+    data = request.get_json()
     json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
     if json_ruleset.returncode != 0:
         return "The command failed with return code:\n"+json_ruleset.returncode
@@ -402,8 +408,11 @@ def route_port_security_del_static():
     nftables = nft_to_normal_json(json_ruleset)
     if "table-port_security" not in nftables["data"]:
         route_port_security_create()
-    interface = request.args.get('interface')
-    mac_address = request.args.get('mac_address')
+    interface = data['interface']
+    try:
+        mac_address = data['mac_address']
+    except:
+        mac_address = None
     if interface == None:
         return "You must specify the interface"
     
@@ -436,3 +445,22 @@ def route_port_security_del_static():
         command = "nft add rule ip port_security input iif {} accept".format(interface)
         execute_bash_command(command)
         return "Port Security disabled for interface {}".format(interface)
+
+
+
+@webapi.route("/port-security/view", methods = ['GET'])
+def route_port_security_view():
+    json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
+    if json_ruleset.returncode != 0:
+        return "The command failed with return code:\n"+json_ruleset.returncode
+    json_ruleset = json.loads(json_ruleset.stdout)
+    nftables = nft_to_normal_json(json_ruleset)
+    if "table-port_security" not in nftables["data"]:
+        route_port_security_create()
+    
+    ports = get_all_ports(("port_security", None))
+    
+    return ps_ports.dump(ports)
+    
+    
+

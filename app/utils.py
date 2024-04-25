@@ -4,13 +4,17 @@
 
 import collections
 import json
+import pathlib
 import re
+from turtle import Turtle
 from typing import Union
 import ovs
 import ovs.jsonrpc
 import os
 import subprocess
 from copy import deepcopy
+
+from .dataclasses.port_security import PSPorts
 
 
 def tabulateError(err):
@@ -121,4 +125,52 @@ def execute_bash_command(command: str):
     subprocess.run(command, shell=True, executable="/bin/bash")
     
 
-        
+def get_all_ports(args: Turtle) -> list:
+    excluded_ports = ['lo', 'ovs-system']
+    ports = []
+    devs = pathlib.Path("/sys/class/net/")
+    for dir in devs.iterdir():
+        if dir.name not in excluded_ports:
+            port = None
+            key, value = args
+            match key:
+                case "port_security":
+                    json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
+                    if json_ruleset.returncode != 0:
+                        return "The command failed with return code:\n"+json_ruleset.returncode
+                    json_ruleset = json.loads(json_ruleset.stdout)
+                    nftables = nft_to_normal_json(json_ruleset)
+                    
+                    number_rules = 0
+                    try:
+                        number_rules = nftables["data"]["table-port_security"]["chain-input"]["count-rule"]
+                    except: 
+                        pass
+                    
+                    mac_count = 0
+                    status = False
+                    for i in range(1,number_rules):
+                        rule = "rule-"+str(i)
+                        _interface = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][0]["match"]["right"]
+                        if _interface == dir.name:
+                            mac_count+=1
+                            status = True
+                            
+                    if status == True:
+                        rule = "rule-"+str(number_rules)
+                        accept = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][1]
+                        if "accept" in accept:
+                            status = False
+                    
+                    port = PSPorts(dir.name,
+                                   mac_count,
+                                   mac_count,
+                                   False,
+                                   "Delete on Timeout",
+                                   status)
+                case _:
+                    port = dir.name
+            
+            ports.append(port)
+    
+    return ports
