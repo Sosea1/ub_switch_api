@@ -126,9 +126,12 @@
          <button> Clear Tags </button>
       </form>
       <label>DHCP Snopping</label>
-      <form action="#" id="form_dhcp_snopping">
-         <select id="form_dhcp_snopping_select"></select>
+      <form action="#" id="form_dhcp_snopping_on">
+         <select id="form_dhcp_snopping_select_on"></select>
          <button> Включить </button>
+      </form>
+      <form action="#" id="form_dhcp_snopping_off">
+         <select id="form_dhcp_snopping_select_off"></select>
          <button> Отключить </button>
       </form>
    </div>
@@ -256,6 +259,25 @@
       makeRequest({"action": "vlan_port_clear_tag", "port_name": text});
    });
 
+   addSubmitCallback("form_dhcp_snopping_on", function(event) {
+      event.preventDefault();
+
+      var input = document.getElementById('form_dhcp_snopping_select_on')
+      var text = input.options[input.selectedIndex].label;
+
+      makeRequest({"action": "port_enable_dhcp_snooping", "port_name": text});
+   });
+
+   addSubmitCallback("form_dhcp_snopping_off", function(event) {
+      event.preventDefault();
+
+      var input = document.getElementById('form_dhcp_snopping_select_off')
+      var text = input.options[input.selectedIndex].label;
+
+      makeRequest({"action": "port_disable_dhcp_snooping", "port_name": text});
+   });
+   
+
    
    var last_status = false; // Статус сервиса на момент предыдущего запроса
    var last_ports_update_id = 0;
@@ -353,6 +375,8 @@
                               exInfo += "VU "+value["vlan_access"]+"<br>";
                            if(value["vlan_trunks"])
                               exInfo += "VT "+value["vlan_trunks"]+"<br>";
+                           if(value["dhcp_snoop"])
+                              exInfo += "dhcp_snoop<br>";
                            object.lastChild.lastChild.innerHTML = exInfo;
 
                            let option = document.createElement("option");
@@ -374,11 +398,17 @@
                      form_vlan_trunks_port.replaceChildren();
                      let form_vlan_native_untagged_port = document.getElementById("form_vlan_native_untagged_port");
                      form_vlan_native_untagged_port.replaceChildren();
+                     let form_dhcp_snopping_on = document.getElementById("form_dhcp_snopping_select_on");
+                     form_dhcp_snopping_on.replaceChildren();
+                     let form_dhcp_snopping_off = document.getElementById("form_dhcp_snopping_select_off");
+                     form_dhcp_snopping_off.replaceChildren();
 
                      slaved_interfaces.childNodes.forEach(function(value) {
                         form_vlan_access_port.appendChild(value.cloneNode());
                         form_vlan_trunks_port.appendChild(value.cloneNode());
                         form_vlan_native_untagged_port.appendChild(value.cloneNode());
+                        form_dhcp_snopping_on.appendChild(value.cloneNode());
+                        form_dhcp_snopping_off.appendChild(value.cloneNode());
                      });
                   }
 

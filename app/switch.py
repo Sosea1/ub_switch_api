@@ -87,6 +87,8 @@ class SwitchCore:
         lines = self.cmd_vsctl(['show']).split('\n')
         lines_next = []
 
+        dhcp_snoop_list = self.kernel_dhcp_snooping_read()
+
         # f4e57597-4dc4-44c6-bc02-25e09c67157e
         #     Bridge "Test"
         #         Port "Test"
@@ -163,6 +165,9 @@ class SwitchCore:
                     reg = re.match(r'^trunks: \[(.*)\]$', line)
                     if reg:
                         port_config_out['vlan_trunks'] = [int(tag) for tag in reg[1].split(', ')]
+
+                if port_config_key in dhcp_snoop_list:
+                    port_config_out['dhcp_snoop'] = True
 
                 ports.append(port_config_out)
 
@@ -257,6 +262,11 @@ class SwitchCore:
                         configuration[port]["bridge"] = bridge
                         break
 
+        # Чтение конфигурации DHCP snooping
+        for dev in self.kernel_dhcp_snooping_read():
+            if dev in configuration:
+                configuration[dev]['dhcp_snoop'] = True
+
         # Если хеш не сошёлся не сошёлся, значит конфигурация изменилась
         hash = self.md5(json.dumps(configuration).encode())
         if self._hash_interface_configuration != hash: 
@@ -265,6 +275,27 @@ class SwitchCore:
 
         return configuration
         
+    def kernel_dhcp_snooping_read(self):
+        try:
+            fd = open('/dev/little_firewall', 'r')
+            devs = fd.read()
+            devs = devs.split('\0')[:-1]
+            fd.close()
+
+            return set(devs)
+        except Exception as exc:
+            print(exc)
+            return []
+
+    def kernel_dhcp_snooping_write(self, devs: set):
+        devs = list(set(devs))
+
+        fd = open('/dev/little_firewall', 'w')
+        fd.write('\0'.join(devs)+'\0')
+        fd.close()
+
+
+
     # Возвращает конфигурацию портов и их состояние в виде словаря
     # { configuration: {} -- Если update_id клиента просрочен
     #   groups: {"bridge1": ["eth0", "eth1"]}, -- Объединённые интерфейсы
@@ -289,6 +320,21 @@ class SwitchCore:
             return simple_interface.create_error(f'Порт не существует: {port_name}')
 
         self.run_cmd(['ip', 'link', 'set', 'dev', str(port_name), 'up' if state else 'down'])
+        return simple_interface.create_result({})
+
+    # Активировать или отключить dhcp snooping
+    def port_set_dhcp_snooping_state(self, port_name: str, state: bool):
+        if port_name in self._excluded_ports:
+            return simple_interface.create_error(f'Порт не существует: {port_name}')
+
+        devs = self.kernel_dhcp_snooping_read()
+        port_name = port_name.replace('\0', '\n')
+        if state:
+            devs.add(port_name)
+        else:
+            devs.remove(port_name)
+        self.kernel_dhcp_snooping_write(devs)
+
         return simple_interface.create_result({})
 
 
@@ -384,7 +430,7 @@ class SwitchCore:
         if port not in bridget_ports or port in self._excluded_ports:
             return simple_interface.create_error(f'Порт не существует или не находится в мосте: {port}')
         
-        output = self.cmd_vsctl(['set', 'clear', 'port', port, 'tag', 'trunk'])
+        output = self.cmd_vsctl(['clear', 'port', port, 'tag', 'trunk'])
         if len(output) > 0:
             return simple_interface.create_error(output)
 

@@ -129,6 +129,20 @@ def web_apiV0():
 
                 return switch.SWC.port_set_enable_state(port_name, False)
 
+            case "port_enable_dhcp_snooping":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.port_set_dhcp_snooping_state(port_name, True)
+
+            case "port_disable_dhcp_snooping":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.port_set_dhcp_snooping_state(port_name, False)
+
             case "create_bridge":
                 br_name = json.get("br_name")
                 if not br_name:
