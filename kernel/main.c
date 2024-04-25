@@ -1,4 +1,7 @@
 #include "linux/netfilter.h"
+#include "linux/uaccess.h"
+#include "linux/uio.h"
+#include "linux/vmalloc.h"
 #include <linux/netfilter.h>
 #include <linux/err.h>
 #include <linux/gfp.h>
@@ -16,6 +19,22 @@
 #define MODULE_NAME "switchic"
 #define log(level, ftm, ...) printk(level "%s: "ftm"\n", MODULE_NAME, ##__VA_ARGS__);
 uint32_t IP = 0;
+
+// DHCP Snopping devs
+
+struct dhcp_snopping_info {
+    char *devs;
+    size_t count, size, end;
+};
+
+struct dhcp_snop_rewrite {
+    struct dhcp_snopping_info info;
+    size_t readed;
+    bool bad_write;
+};
+
+static struct dhcp_snopping_info dhcp_snopping_active = {NULL, 0, 0, 0};
+
 // ~~~~~ IP filter ~~~~~
 
 // ~~~~~ /dev/little_firewall ~~~~
@@ -30,7 +49,17 @@ static int device_lf_on_open(struct inode *inode, struct file *file)
     
     IsOpen++;
     if(try_module_get(THIS_MODULE))
+    {
+        size_t size = sizeof(struct dhcp_snop_rewrite);
+        file->private_data = vmalloc(size);
+
+        if(!file->private_data)
+            return -EIO;
+
+        memset(file->private_data, 0, size);
+        ((struct dhcp_snop_rewrite*) file->private_data)->bad_write = true;
         return 0;
+    }
 
     return -EIO;
 }
@@ -39,6 +68,40 @@ static int device_lf_on_open(struct inode *inode, struct file *file)
 static int device_lf_on_release(struct inode *inode, struct file *file)
 {
     IsOpen = 0;
+    if(file->private_data)
+    {
+        char *prev = dhcp_snopping_active.devs;
+        struct dhcp_snop_rewrite *header = file->private_data;
+        struct dhcp_snopping_info *info = &header->info;
+        if(header->bad_write)
+        {
+            if(info->devs)
+                vfree(info->devs);
+        } else if(!prev)
+        {
+            dhcp_snopping_active.devs = info->devs;
+            dhcp_snopping_active.size = info->size;
+            dhcp_snopping_active.end = info->end;
+            dhcp_snopping_active.count = info->count;
+        } else {
+            if(info->count > dhcp_snopping_active.count)
+            {
+                dhcp_snopping_active.devs = info->devs;
+                dhcp_snopping_active.count = info->count;
+            } else {
+                dhcp_snopping_active.count = info->count;
+                dhcp_snopping_active.devs = info->devs;
+            }
+
+            dhcp_snopping_active.size = info->size;
+            dhcp_snopping_active.end = info->end;
+
+            vfree(prev);
+        }
+
+        vfree(file->private_data);
+    }
+
     module_put(THIS_MODULE);
     return 0;
 }
@@ -46,26 +109,67 @@ static int device_lf_on_release(struct inode *inode, struct file *file)
 // Чтение
 static ssize_t device_lf_on_read(struct file *flip, char *buffer, size_t len, loff_t *offset)
 {
-    size_t readed = 0;
-    char *number = kmalloc(256, GFP_KERNEL);
-    size_t count = snprintf(number, 256, "%u\n", IP);
-    while(readed != len && readed != count)
-    {
-        if(put_user(number[readed], buffer++))
-            return -EIO;
-        readed++;
-    }
+    struct dhcp_snop_rewrite *info = (struct dhcp_snop_rewrite*) flip->private_data;
+    if(info->readed >= dhcp_snopping_active.end)
+        return 0;
 
-    kfree(number);
-    number = NULL;
+    size_t how_many = min(len, dhcp_snopping_active.end-info->readed);
+    if(copy_to_user(buffer, dhcp_snopping_active.devs+info->readed, how_many))
+        return -EIO;
 
-    return readed;
+    info->readed += how_many;
+
+    return (ssize_t) how_many;
 }
 
 // Запись
 static ssize_t device_lf_on_write(struct file *flip, const char *buffer, size_t len, loff_t *offset)
 {
-    return -EROFS;
+    struct dhcp_snop_rewrite *info = flip->private_data;
+
+    if(info->info.end+len < info->info.size || !info->info.devs)
+    {
+        // Перевыделение памяти
+        size_t new_size = (info->info.size >> 1) + info->info.size;
+
+        if(new_size == 0)
+        {
+            new_size = 128;
+            info->bad_write = false;
+        }
+
+        char *ptr = vmalloc(new_size);
+
+        if(!ptr)
+        {
+            info->bad_write = true;
+            return -EIO;
+        }
+
+        char *from = info->info.devs, *to = ptr;
+        for(size_t iter = 0; iter < info->info.end; iter++, from++, to++)
+            *to = *from;
+
+        from = info->info.devs;
+        info->info.devs = ptr;
+        vfree(from);
+        info->info.size = new_size;
+    }
+
+    if(copy_from_user(info->info.devs+info->info.end, buffer, len))
+    {
+        info->bad_write = true;
+        return -EIO;
+    }
+    
+    char *start = info->info.devs + info->info.end;
+    for(size_t iter = 0; iter < len; iter++, start++)
+        if(*start == '\0')
+            info->info.count++;
+
+    info->info.end += len;
+
+    return len;
 }
 
 static dev_t device_lf_major = 0;
@@ -85,6 +189,37 @@ static unsigned int packet_hook(void *in, struct sk_buff *skb, const struct nf_h
 {
     if(!strcmp(state->in->name, "enp1s0")) // Не трогаем адаптер через который работаем с виртуальной машиной
         return NF_ACCEPT;
+
+    // Трогаем адаптеры в списке
+    {
+        bool finded = false;
+        char *begin = dhcp_snopping_active.devs;
+        size_t start_size = dhcp_snopping_active.size, offset = 0;
+
+        for(size_t iter = 0; iter < dhcp_snopping_active.count; iter++)
+        {
+            if(strcmp(begin, state->in->name) == 0)
+            {
+                finded = true;
+                break;
+            }
+
+            size_t find_zero = 0;
+            for(; find_zero < dhcp_snopping_active.end-offset && *begin != '\0'; find_zero++, begin++);
+            if(dhcp_snopping_active.end == (size_t) (begin-dhcp_snopping_active.devs))
+                break;
+
+            find_zero++;
+            begin++;
+            offset += find_zero;
+
+            if(start_size != dhcp_snopping_active.size)
+                break;
+        }
+
+        if(!finded)
+            return NF_ACCEPT;
+    }
 
     // ip заголовок
     struct iphdr *ip_header = (struct iphdr*) skb_network_header(skb);

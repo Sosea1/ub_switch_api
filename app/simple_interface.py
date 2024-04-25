@@ -115,6 +115,20 @@ def web_apiV0():
 
                 return switch.SWC.get_ports(int(client_update_id))
 
+            case "port_enable":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.port_set_enable_state(port_name, True)
+
+            case "port_disable":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.port_set_enable_state(port_name, False)
+
             case "create_bridge":
                 br_name = json.get("br_name")
                 if not br_name:

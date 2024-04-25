@@ -83,9 +83,17 @@
    <div style="display: flex; flex-direction: column;">
       <label>Left menu</label>
       <button onclick='makeRequest({"action": "init_swc"})'>Загрузить SWC</button>
+      <form action="#" id="form_port_enable">
+         <select id="form_port_enable_select"> </select>
+         <button> Включить </button>
+      </form>
+      <form action="#" id="form_port_disable">
+         <select id="form_port_disable_select"> </select>
+         <button> Отключить </button>
+      </form>
       <label>Мосты</label>
       <form action="#" id="form_create_group">
-         <input id="form_create_group_name">
+         <input id="form_create_group_name"> 
          <button> Создать группу </button>
       </form>
       <form action="#" id="form_remove_group">
@@ -115,9 +123,14 @@
       </form>
       <form action="#" id="form_vlan_native_untagged">
          <select id="form_vlan_native_untagged_port"></select>
-         <button> Make Native Untagged </button>
+         <button> Clear Tags </button>
       </form>
       <label>DHCP Snopping</label>
+      <form action="#" id="form_dhcp_snopping">
+         <select id="form_dhcp_snopping_select"></select>
+         <button> Включить </button>
+         <button> Отключить </button>
+      </form>
    </div>
    <div style="display: flex; flex-direction: column; min-width: 50%; max-width: 50%; text-align: center;">
       <label id="board_ports_global_status" style="color: red;"></label>
@@ -126,6 +139,7 @@
    </div>
    <div style="display: flex; flex-direction: column;">
       <label>Right menu</label>
+      <label>Модуль ядра: </label> <label id="kernel_support"></label>
    </div>
    </div>
 
@@ -159,6 +173,23 @@
          ele.attachEvent('onsubmit', callback);            //Old IE
       }
    }
+
+   
+   addSubmitCallback("form_port_enable", function(event) {
+      event.preventDefault();
+
+      var input = document.getElementById('form_port_enable_select');
+      var text = input.options[input.selectedIndex].label;
+      makeRequest({"action": "port_enable", "port_name": text});
+   });
+
+   addSubmitCallback("form_port_disable", function(event) {
+      event.preventDefault();
+
+      var input = document.getElementById('form_port_disable_select')
+      var text = input.options[input.selectedIndex].label;
+      makeRequest({"action": "port_disable", "port_name": text});
+   });
 
    addSubmitCallback("form_create_group", function(event) {
       event.preventDefault();
@@ -280,6 +311,12 @@
                      let slaved_interfaces = document.getElementById("form_remove_port_from_group_port");
                      slaved_interfaces.replaceChildren();
 
+                     // Списки всех портов
+                     let form_port_enable = document.getElementById("form_port_enable_select");
+                     form_port_enable.replaceChildren();
+                     let form_port_disable = document.getElementById("form_port_disable_select");
+                     form_port_disable.replaceChildren();
+
                      // Создаём группы интерфейсов
                      let groups = json["groups"];
                      let bridges = document.getElementById("board_bridges");
@@ -318,19 +355,25 @@
                               exInfo += "VT "+value["vlan_trunks"]+"<br>";
                            object.lastChild.lastChild.innerHTML = exInfo;
 
-                           if(key != "*" && key != value["name"])
-                           {
-                              let option = document.createElement("option");
+                           let option = document.createElement("option");
                               option.label = value["name"];
-                              slaved_interfaces.appendChild(option);
-                           }
+
+                           if(key != "*" && key != value["name"])
+                              slaved_interfaces.appendChild(option.cloneNode());
+
+                              form_port_enable.appendChild(option.cloneNode());
+                              form_port_disable.appendChild(option.cloneNode());
+                           
                         });
                         bridges.appendChild(object);
                      }
 
                      let form_vlan_access_port = document.getElementById("form_vlan_access_port");
+                     form_vlan_access_port.replaceChildren();
                      let form_vlan_trunks_port = document.getElementById("form_vlan_trunks_port");
+                     form_vlan_trunks_port.replaceChildren();
                      let form_vlan_native_untagged_port = document.getElementById("form_vlan_native_untagged_port");
+                     form_vlan_native_untagged_port.replaceChildren();
 
                      slaved_interfaces.childNodes.forEach(function(value) {
                         form_vlan_access_port.appendChild(value.cloneNode());
@@ -338,6 +381,11 @@
                         form_vlan_native_untagged_port.appendChild(value.cloneNode());
                      });
                   }
+
+                  if(json["kernel_support"])
+                     $("#kernel_support").html("Активен");
+                  else
+                     $("#kernel_support").html("Отключен");
 
                   // Обновляем активность портов
                   let activity = new Set(json["activity"]);

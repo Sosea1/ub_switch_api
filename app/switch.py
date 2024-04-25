@@ -7,6 +7,7 @@ from . import simple_interface
 import hashlib
 import traceback
 import json
+import os
 
 SWC = None
 
@@ -37,6 +38,12 @@ class SwitchCore:
         # for iter in range(virtual_ports):
         #     self.vsctl(['add-port', 'dummy_switch', f'ether{iter}', '--', 'set', 'interface', f'ether{iter}', 'type=internal'])
 
+        self._module_path = os.path.dirname(os.path.realpath(__file__))+'/main.ko'
+        self.run_cmd(['rmmod', 'main.ko'])
+        self.run_cmd(['insmod', self._module_path])
+        output = self.run_cmd(['bash', '-c', 'lsmod | grep main'])
+        self._is_module_loaded = len(output) > 0
+
         # Запуск рабочего потока
         self._thread_loop = threading.Thread(target=self._run)
         self._thread_loop.start()
@@ -62,6 +69,8 @@ class SwitchCore:
 
             time.sleep(0.001)
 
+        self.run_cmd(['rmmod', 'main.ko'])
+        
         if self.is_alive:
             print("WatchDog: поток ядра коммутатора не завершил работу вовремя")
             
@@ -265,6 +274,7 @@ class SwitchCore:
     # }
     def get_ports(self, client_update_id: int) -> dict:
         out = {"update_id": self._update_id, "activity": self._interface_activity}
+        out["kernel_support"] = self._is_module_loaded
 
         if self._update_id != client_update_id:
             out["configuration"] = self.get_interfaces_configuration()
@@ -272,6 +282,15 @@ class SwitchCore:
             out["groups"]["*"] = [{"name": iter} for iter in self.cmd_vsctl_get_freeports()]
 
         return simple_interface.create_result(out)
+
+    # Активировать или отключить интерфейс
+    def port_set_enable_state(self, port_name: str, state: bool):
+        if port_name in self._excluded_ports:
+            return simple_interface.create_error(f'Порт не существует: {port_name}')
+
+        self.run_cmd(['ip', 'link', 'set', 'dev', str(port_name), 'up' if state else 'down'])
+        return simple_interface.create_result({})
+
 
     # Создать группу
     def create_bridge(self, br_name: str):
