@@ -149,19 +149,20 @@ def get_all_ports(args: Turtle) -> list:
                     
                     mac_count = 0
                     status = False
-                    for i in range(1,number_rules):
+                    for i in range(1,number_rules+1):
                         rule = "rule-"+str(i)
                         _interface = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][0]["match"]["right"]
                         if _interface == dir.name:
+                            accept = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"]
+                            if len(accept) <= 2:
+                                _ = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][1]
+                                if "accept" in _:
+                                    status = False
+                                else:
+                                    status = True
+                                continue
                             mac_count+=1
                             status = True
-                            
-                    if status == True:
-                        rule = "rule-"+str(number_rules)
-                        accept = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][1]
-                        if "accept" in accept:
-                            status = False
-                    
                     port = PSPorts(dir.name,
                                    mac_count,
                                    mac_count,

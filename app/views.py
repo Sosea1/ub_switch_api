@@ -377,10 +377,14 @@ def route_port_security_add_static():
         pass
     
     if number_rules >= 1:
-            rule = "rule-"+str(number_rules)
-            handle = nftables["data"]["table-port_security"]["chain-input"][rule]["handle"]
-            command = "nft delete rule ip port_security input handle {}".format(handle)
-            execute_bash_command(command)
+        for i in range (0, number_rules):
+            rule = "rule-"+str(number_rules-i)
+            _interface = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][0]["match"]["right"]
+            if _interface == interface:
+                handle = nftables["data"]["table-port_security"]["chain-input"][rule]["handle"]
+                command = "nft delete rule ip port_security input handle {}".format(handle)
+                execute_bash_command(command)
+                break
     
     if mac_address:
         command = "nft add rule ip port_security input iif {} ether saddr {} accept".format(interface, mac_address)
