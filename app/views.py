@@ -426,29 +426,34 @@ def route_port_security_del_static():
     except: 
         pass
 
-    if mac_address:
-        if number_rules >= 1:
-            for i in range(1,number_rules):
-                rule = "rule-"+str(i)
-                _interface = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][0]["match"]["right"]
-                if _interface != interface:
-                    continue
-                _mac = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][1]["match"]["right"]
-                if _mac != mac_address:
-                    continue
+    if number_rules >= 1:
+        for i in range (0, number_rules):
+            rule = "rule-"+str(number_rules-i)
+            _interface = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][0]["match"]["right"]
+            if _interface == interface:
                 handle = nftables["data"]["table-port_security"]["chain-input"][rule]["handle"]
                 command = "nft delete rule ip port_security input handle {}".format(handle)
                 execute_bash_command(command)
-        return "Rule deleted for interface {} for MAC {}".format(interface, mac_address)
-                
+                break
+    
+    if mac_address:
+        for i in range(1,number_rules):
+            rule = "rule-"+str(i)
+            _interface = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][0]["match"]["right"]
+            if _interface != interface:
+                continue
+            _mac = nftables["data"]["table-port_security"]["chain-input"][rule]["expr"][1]["match"]["right"]
+            if _mac != mac_address:
+                continue
+            handle = nftables["data"]["table-port_security"]["chain-input"][rule]["handle"]
+            command = "nft delete rule ip port_security input handle {}".format(handle)
+            execute_bash_command(command)
+        return jsonify("Rule deleted for interface {} with MAC {}".format(interface, mac_address))
+    
     else:
-        rule = "rule-"+str(number_rules)
-        handle = nftables["data"]["table-port_security"]["chain-input"][rule]["handle"]
-        command = "nft delete rule ip port_security input handle {}".format(handle)
-        execute_bash_command(command)
         command = "nft add rule ip port_security input iif {} accept".format(interface)
         execute_bash_command(command)
-        return "Port Security disabled for interface {}".format(interface)
+        return jsonify("Port Security disabled for interface {}".format(interface))
 
 
 
