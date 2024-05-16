@@ -12,6 +12,10 @@
          background-image: url("simple/port_bridge.png");
       }
 
+      .port_not_found {
+         background-image: url("simple/port_not_found.png");
+      }
+
       .port {
          position: relative;
          display: flex;
@@ -78,7 +82,7 @@
    </style>
 </head>
 
-<body style="background-color: gray">
+<body style="background-color: white">
    <div style="display: flex; justify-content: space-around;">
    <div style="display: flex; flex-direction: column;">
       <label>Left menu</label>
@@ -350,8 +354,8 @@
                            // Разгруппированные интерфейсы
                            value.forEach(function (value) {
                               let option = document.createElement("option");
-                              option.label = value["name"];
-                              list_internal.appendChild(option);
+                              option.label = value;
+                              list_internal.appendChild(option);value
                            });
                         } else {
                            // Добавляем интерфейс
@@ -368,21 +372,22 @@
                         object = document.createElement("div");
                         object.classList.add("bridge_group");
                         value.forEach(function (value) {
-                           object.appendChild(createPort(value["name"], value["name"]));
+                           object.appendChild(createPort(value, value));
+                           let port_conf = configuration[value]
 
                            let exInfo = "";
-                           if(value["vlan_access"])
+                           if(port_conf["vlan_access"])
                               exInfo += "VU "+value["vlan_access"]+"<br>";
-                           if(value["vlan_trunks"])
+                           if(port_conf["vlan_trunks"])
                               exInfo += "VT "+value["vlan_trunks"]+"<br>";
-                           if(value["dhcp_snoop"])
+                           if(port_conf["dhcp_snoop"])
                               exInfo += "dhcp_snoop<br>";
                            object.lastChild.lastChild.innerHTML = exInfo;
 
                            let option = document.createElement("option");
-                              option.label = value["name"];
+                              option.label = value;
 
-                           if(key != "*" && key != value["name"])
+                           if(key != "*" && key != value)
                               slaved_interfaces.appendChild(option.cloneNode());
 
                               form_port_enable.appendChild(option.cloneNode());
@@ -433,7 +438,7 @@
                      is_bridge = value.bridge == key;
                      state = value.state;
 
-                     if(state)
+                     if(state > 0)
                      {
                         state = state & 0b11;
                         port.classList.add("port_l_up");
@@ -447,17 +452,29 @@
                      else
                         port.classList.remove("port_r_up");
 
-                     if(is_bridge) {
-                        port.classList.add("port_bridge");
+
+
+                     if(state == -1)
+                     {
+                        port.classList.add("port_not_found")
                         port.classList.remove("port_internal");
-                     } else{
-                        port.classList.add("port_internal");
                         port.classList.remove("port_bridge");
+                     } else {
+
+                        if(is_bridge) {
+                           port.classList.add("port_bridge");
+                           port.classList.remove("port_internal");
+                           port.classList.remove("port_not_found");
+                        } else{
+                           port.classList.add("port_internal");
+                           port.classList.remove("port_bridge");
+                           port.classList.remove("port_not_found");
+                        }
                      }
                   }
 
                } else {
-                  console.log('Error: ${xhr.status} ${xhr.readyState}');
+                  console.log('Error: '+xhr.status+' '+xhr.readyState);
                }
             };
 

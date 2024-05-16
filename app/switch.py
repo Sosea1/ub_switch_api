@@ -22,7 +22,8 @@ class SwitchCore:
         self._config = {}
         self._debug_port = debug_port           # Интерфейс отладки виртуальной машины
                         # Интерфейсы, которые не будут использоваться в коммутации 
-        self._excluded_ports = [debug_port, 'lo', 'ovs-system']
+        self._excluded_ports = [debug_port, 'lo', 'ovs-system', 'docker0']
+        self._excluded_ports_docker = []
         self._update_id = time.time()*100       # Счётчик обновления конфигурации портов
         self._last_packets_view = {}            # Последняя активность интерфейсов
         self._interface_activity = []           # Список активных интерфейсов на момент последней проверки (была обработка пакетов)
@@ -74,6 +75,10 @@ class SwitchCore:
         if self.is_alive:
             print("WatchDog: поток ядра коммутатора не завершил работу вовремя")
             
+    # Фильтрует/отклоняет системные порты
+    def isCorePort(self, port_name: str):
+        return port_name in self._excluded_ports or port_name in self._excluded_ports_docker
+
 
     def run_cmd(self, cmd_args = []):
         output = subprocess.Popen(cmd_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -82,7 +87,7 @@ class SwitchCore:
     def cmd_vsctl(self, args = []):
         return self.run_cmd(['ovs-vsctl'] + args)
 
-    # Сведения о мостах и их портах {"bridge_name": ["port1", "port2"]}
+    # Сведения о мостах и их портах {"bridge_name": {"port1": {"tag": 6}, "port2": {}}}
     def cmd_vsctl_show(self) -> dict:
         lines = self.cmd_vsctl(['show']).split('\n')
         lines_next = []
@@ -141,21 +146,21 @@ class SwitchCore:
         for bridge in bridge_lines:
 
             # Исключаем не нужные интерфейсы
-            if(bridge in self._excluded_ports):
+            if self.isCorePort(bridge):
                 continue
 
             lines = bridge_lines[bridge]
             port_lines = read_sub_groups(lines, 'Port')
 
-            ports = []
+            ports = {}
 
             for port_config_key in port_lines:
                 # Исключаем не нужные интерфейсы
-                if(port_config_key in self._excluded_ports):
+                if self.isCorePort(port_config_key):
                     continue
 
                 port_config_lines = port_lines[port_config_key]
-                port_config_out = {"name": port_config_key}
+                port_config_out = {}
 
                 for line in port_config_lines:
                     reg = re.match(r'^tag: (\d+)$', line)
@@ -169,7 +174,7 @@ class SwitchCore:
                 if port_config_key in dhcp_snoop_list:
                     port_config_out['dhcp_snoop'] = True
 
-                ports.append(port_config_out)
+                ports[port_config_key] = port_config_out
 
             out[bridge] = ports
 
@@ -181,7 +186,7 @@ class SwitchCore:
         out = set()
         for key in bridges:
             for port in bridges[key]:
-                out.add(port['name'])
+                out.add(port)
 
         return out
 
@@ -202,16 +207,30 @@ class SwitchCore:
     def sys_all_exists_ports(self) -> set:
         ports = set()
         devs = pathlib.Path("/sys/class/net/")
+
+        # Сначала определим не нужные порты (docker)
+        new_excluded = set()
+        for dir in devs.iterdir():
+            for dir2 in dir.iterdir():
+                if not dir2.name.startswith("upper_"):
+                    continue
+
+                if open(dir2 / "address", "r").readline().startswith("02:42"):
+                    new_excluded.add(dir.name)
+                    new_excluded.add(dir2.name[6:])
+
+        self._excluded_ports_docker = new_excluded
+
         for dir in devs.iterdir():
             # Исключаем не нужные порты
-            if(dir.name in self._excluded_ports):
+            if self.isCorePort(dir.name):
                 continue
 
             ports.add(dir.name)
 
         devs = self.cmd_vsctl_show()
         for key in devs:
-            ports.union(set([iter['name'] for iter in devs[key]]))
+            ports.union(set(devs[key].keys()))
 
         return ports
 
@@ -222,12 +241,12 @@ class SwitchCore:
         bridged = self.cmd_vsctl_show()
 
         for key in bridged:
-            allPort = allPort.difference(set([iter['name'] for iter in bridged[key]]))
+            allPort = allPort.difference(set(bridged[key].keys()))
 
         return list(allPort)
 
     # Возвращает текущее состояние портов
-    # {"port1": 1, "port2": 0, "port3": 2} -- eth0=up, eth1=down, eth2=отправка пакетов отключена (learning)
+    # {"port1": 1, "port2": 0, "port3": 2, "port4": -1} -- eth0=up, eth1=down, eth2=отправка пакетов отключена (learning), eth4=не найден
     def get_interfaces_state(self) -> dict:
         states = {}
 
@@ -235,7 +254,7 @@ class SwitchCore:
         devs = pathlib.Path("/sys/class/net/")
         for dir in devs.iterdir():
             name = dir.name
-            if name in self._excluded_ports:
+            if self.isCorePort(name):
                 continue # Пропускаем не нужные порты
 
             if "down" not in open(dir / "operstate", "r").readline():
@@ -251,16 +270,19 @@ class SwitchCore:
         configuration = self.get_interfaces_state()
         bridges_groups = self.cmd_vsctl_show()
 
-        ports = configuration.keys()
-        for port in ports:
+        for port in configuration.keys():
             configuration[port] = {"state": configuration[port]} # Переносим состояние в переменную
 
             # Находим какому мосту принадлежит порт
             for bridge in bridges_groups:
-                for iter in bridges_groups[bridge]:
-                    if iter['name'] == port:
-                        configuration[port]["bridge"] = bridge
-                        break
+                if port in bridges_groups[bridge]:
+                    configuration[port]["bridge"] = bridge
+                    configuration[port].update(bridges_groups[port])
+
+        # Добавляем отсутствующие, но упоминающиеся порты
+        for port in bridges_groups[bridge]:
+            if port not in configuration:
+                configuration[port] = {"state": -1}
 
         # Чтение конфигурации DHCP snooping
         for dev in self.kernel_dhcp_snooping_read():
@@ -295,7 +317,6 @@ class SwitchCore:
         fd.close()
 
 
-
     # Возвращает конфигурацию портов и их состояние в виде словаря
     # { configuration: {} -- Если update_id клиента просрочен
     #   groups: {"bridge1": ["eth0", "eth1"]}, -- Объединённые интерфейсы
@@ -309,14 +330,18 @@ class SwitchCore:
 
         if self._update_id != client_update_id:
             out["configuration"] = self.get_interfaces_configuration()
-            out["groups"] = self.cmd_vsctl_show()
-            out["groups"]["*"] = [{"name": iter} for iter in self.cmd_vsctl_get_freeports()]
+            vs_show = self.cmd_vsctl_show()
+            out["groups"] = {}
+            for key in vs_show:
+                out["groups"][key] = list(vs_show[key].keys())
+
+            out["groups"]["*"] = self.cmd_vsctl_get_freeports()
 
         return simple_interface.create_result(out)
 
     # Активировать или отключить интерфейс
     def port_set_enable_state(self, port_name: str, state: bool):
-        if port_name in self._excluded_ports:
+        if self.isCorePort(port_name):
             return simple_interface.create_error(f'Порт не существует: {port_name}')
 
         self.run_cmd(['ip', 'link', 'set', 'dev', str(port_name), 'up' if state else 'down'])
@@ -324,7 +349,7 @@ class SwitchCore:
 
     # Активировать или отключить dhcp snooping
     def port_set_dhcp_snooping_state(self, port_name: str, state: bool):
-        if port_name in self._excluded_ports:
+        if self.isCorePort(port_name):
             return simple_interface.create_error(f'Порт не существует: {port_name}')
 
         devs = self.kernel_dhcp_snooping_read()
@@ -357,7 +382,7 @@ class SwitchCore:
     # Удалить группу
     def remove_bridge(self, br_name: str):
         bridges = self.cmd_vsctl_show_onlyBridges()
-        if br_name not in bridges or br_name in self._excluded_ports:
+        if br_name not in bridges or self.isCorePort(br_name):
             return simple_interface.create_error(f'Мост не существует: {br_name}')
 
         output = self.cmd_vsctl(['del-br', br_name])
@@ -372,7 +397,7 @@ class SwitchCore:
         ports = self.cmd_vsctl_get_freeports()
         bridges = self.cmd_vsctl_show_onlyBridges()
 
-        if port_name not in ports or port_name in self._excluded_ports:
+        if port_name not in ports or self.isCorePort(port_name):
             return simple_interface.create_error(f'Порт не может быть сгруппирован, он занят: {port_name}')
 
         if br_name not in bridges:
@@ -389,7 +414,7 @@ class SwitchCore:
     def remove_port_from_bridge(self, port_name: str):
         ports = self.cmd_vsctl_get_freeports()
 
-        if port_name in ports or port_name in self._excluded_ports:
+        if port_name in ports or self.isCorePort(port_name):
             return simple_interface.create_error(f'Порт не находится в группе: {port_name}')
 
         output = self.cmd_vsctl(['del-port', port_name])
@@ -402,7 +427,7 @@ class SwitchCore:
     # Задание access тэга
     def vlan_set_access_tag(self, port: str, tag: int):
         bridget_ports = self.cmd_vsctl_show_onlyPorts()
-        if port not in bridget_ports or port in self._excluded_ports:
+        if port not in bridget_ports or self.isCorePort(port):
             return simple_interface.create_error(f'Порт не существует или не находится в мосте: {port}')
 
         output = self.cmd_vsctl(['set', 'port', port, f'tag={int(tag)}'])
@@ -414,7 +439,7 @@ class SwitchCore:
     # Задание транков
     def vlan_set_trunk_tags(self, port: str, tags: list):
         bridget_ports = self.cmd_vsctl_show_onlyPorts()
-        if port not in bridget_ports or port in self._excluded_ports:
+        if port not in bridget_ports or self.isCorePort(port):
             return simple_interface.create_error(f'Порт не существует или не находится в мосте: {port}')
 
         trunks = ','.join([str(int(iter)) for iter in tags])
@@ -427,7 +452,7 @@ class SwitchCore:
     # Убрать VLan с порта
     def vlan_set_untagged_native(self, port: str):
         bridget_ports = self.cmd_vsctl_show_onlyPorts()
-        if port not in bridget_ports or port in self._excluded_ports:
+        if port not in bridget_ports or self.isCorePort(port):
             return simple_interface.create_error(f'Порт не существует или не находится в мосте: {port}')
         
         output = self.cmd_vsctl(['clear', 'port', port, 'tag', 'trunk'])
@@ -443,7 +468,7 @@ class SwitchCore:
         return sha.hexdigest()
 
     def isValidInterfaceName(self, name: str):
-        return re.match(r'^[\w\d_]{,16}$', name) and name not in self._excluded_ports
+        return re.match(r'^[\w\d_]{,16}$', name) and not self.isCorePort(name)
 
     # Проверка активности интерфейсов
     def _check_interface_activity(self):
@@ -466,7 +491,7 @@ class SwitchCore:
 
             dev = match[1]  # Устройство
 
-            if dev in self._excluded_ports:
+            if self.isCorePort(dev):
                 continue # Пропускаем не нужные порты
 
             devs.add(dev)

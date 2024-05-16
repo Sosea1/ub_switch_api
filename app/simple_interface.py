@@ -105,7 +105,10 @@ def web_apiV0():
                 return web_action_init_swc()
 
         if not swc_is_inited:
-            return create_error("Ядро коммутатора не загружено")
+            result = web_action_init_swc()
+            if not result["ok"]:
+                return result
+            #return create_error("Ядро коммутатора не загружено")
 
         match action:
             case "get_port_configuration":
