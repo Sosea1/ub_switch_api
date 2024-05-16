@@ -2,6 +2,8 @@ from app import webapi
 from flask import request, send_from_directory, make_response
 from enum import Enum
 from . import switch
+import traceback
+import re
 
 class Flags(Enum):
     SWC_NOT_INITIALIZED = 1,
@@ -103,17 +105,111 @@ def web_apiV0():
                 return web_action_init_swc()
 
         if not swc_is_inited:
-            return create_error("Ядро коммутатора не загружено")
+            result = web_action_init_swc()
+            if not result["ok"]:
+                return result
+            #return create_error("Ядро коммутатора не загружено")
 
         match action:
             case "get_port_configuration":
-                return switch.SWC.get_ports()
+                client_update_id = json.get("update_id")
+                if not client_update_id and type(client_update_id) != int:
+                    return create_error('Отсутствует параметр update_id')
+
+                return switch.SWC.get_ports(int(client_update_id))
+
+            case "port_enable":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.port_set_enable_state(port_name, True)
+
+            case "port_disable":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.port_set_enable_state(port_name, False)
+
+            case "port_enable_dhcp_snooping":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.port_set_dhcp_snooping_state(port_name, True)
+
+            case "port_disable_dhcp_snooping":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.port_set_dhcp_snooping_state(port_name, False)
+
+            case "create_bridge":
+                br_name = json.get("br_name")
+                if not br_name:
+                    return create_error('Отсутствует параметр br_name')
+                return switch.SWC.create_bridge(br_name)
+
+            case "remove_bridge":
+                br_name = json.get("br_name")
+                if not br_name:
+                    return create_error('Отсутствует параметр br_name')
+                return switch.SWC.remove_bridge(br_name)
+
+            case "add_port_to_bridge":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                br_name = json.get("br_name")
+                if not br_name:
+                    return create_error('Отсутствует параметр br_name')
+
+                return switch.SWC.add_port_to_bridge(port_name, br_name)
+
+            case "remove_port_from_bridge":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.remove_port_from_bridge(port_name)
+
+            case "vlan_port_set_untagged":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                tag = json.get("tag")
+                if not tag:
+                    return create_error('Отсутствует параметр tag')
+
+                return switch.SWC.vlan_set_access_tag(port_name, int(tag))
+
+            case "vlan_port_set_tagged":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                tag = json.get("tag")
+                if not tag:
+                    return create_error('Отсутствует параметр tag')
+
+                return switch.SWC.vlan_set_trunk_tags(port_name, [int(iter) for iter in re.findall(r'(\d+)', tag)])
+
+            case "vlan_port_clear_tag":
+                port_name = json.get("port_name")
+                if not port_name:
+                    return create_error('Отсутствует параметр port_name')
+
+                return switch.SWC.vlan_set_untagged_native(port_name)
 
             case _:
                 return create_error('Отсутствует обработчик для запроса action='+action)
 
     except Exception as exc:
-        return create_error('Необработанная ошибка при обработке POST запроса: ' + str(type(exc)) + ' -> ' + str(exc), flags=[Flags.BUG])
+        return create_error('Необработанная ошибка при обработке POST запроса: ' + str(type(exc)) + ' -> ' + str(exc) + '\n' + traceback.format_exc(), flags=[Flags.BUG])
 
 
 # Инициализация ядра коммутатора
@@ -121,5 +217,5 @@ def web_action_init_swc():
     if switch.SWC:
         return create_error("Уже инициализировано")
 
-    switch.SWC = switch.SwitchCore(24)
+    switch.SWC = switch.SwitchCore()
     return create_result("Будет сделано")
