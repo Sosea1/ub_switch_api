@@ -1,0 +1,22 @@
+FROM debian:bookworm
+
+RUN apt-get update -y && apt-get install -y openvswitch-switch openvswitch-common supervisor
+RUN mkdir -p /app/mount
+RUN bash -c "source /usr/share/openvswitch/scripts/ovs-lib; ovsdb_tool create /etc/openvswitch/conf.db /usr/share/openvswitch/vswitch.ovsschema"
+WORKDIR /app
+COPY ovs-supervisord.config .
+RUN mkdir -p /var/run/openvswitch/
+
+VOLUME [ "/app/mount/" ]
+
+CMD [ "supervisord", "-nc", "/app/ovs-supervisord.config", "-l", "/app/mount/supervisord.log" ]
+# supervisord -c /app/config
+
+
+
+# PIDFile=/run/openvswitch/ovsdb-server.pid
+# ExecStart=/usr/sbin/ovsdb-server --remote=punix:/var/run/openvswitch/db.sock --pidfile=/run/openvswitch/ovsdb-server.pid
+
+# ExecStartPre = /sbin/modprobe openvswitch
+# PIDFile = /run/openvswitch/ovs-vswitchd.pid
+# ExecStart = /usr/sbin/ovs-vswitchd --pidfile=/run/openvswitch/ovs-vswitchd.pid

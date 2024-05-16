@@ -6,7 +6,10 @@ import collections
 import json
 import pathlib
 import re
-from turtle import Turtle
+try:
+    from turtle import Turtle
+except:
+    Turtle = NotImplemented
 from typing import Union
 import ovs
 import ovs.jsonrpc
