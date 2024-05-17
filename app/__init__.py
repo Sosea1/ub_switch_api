@@ -2,6 +2,7 @@ from flask import Flask
 import os, config
 from flask_cors import CORS
 from flask_marshmallow import Marshmallow
+from flask_socketio import SocketIO
 try:
     from ovs_vsctl import VSCtl
 except Exception as exc:
@@ -9,6 +10,7 @@ except Exception as exc:
 
 # создание экземпляра приложения
 webapi = Flask(__name__)
+SockIO = SocketIO(webapi)
 CORS(webapi)
 webapi.config.from_object(os.environ.get('FLASK_ENV') or 'config.DevelopementConfig')
 

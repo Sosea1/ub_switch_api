@@ -8,6 +8,7 @@ import hashlib
 import traceback
 import json
 import os
+from app import SockIO
 
 SWC = None
 
@@ -291,9 +292,10 @@ class SwitchCore:
                     configuration[port].update(bridges_groups[bridge][port])
 
         # Добавляем отсутствующие, но упоминающиеся порты
-        for port in bridges_groups:
-            if port not in configuration:
-                configuration[port] = {"state": -1}
+        for br in bridges_groups:
+            for port in bridges_groups[br]:
+                if port not in configuration:
+                    configuration[port] = {"state": -1}
 
         # Чтение конфигурации DHCP snooping
         for dev in self.kernel_dhcp_snooping_read():
@@ -531,6 +533,7 @@ class SwitchCore:
     # Функция рабочего потока
     def _run(self):
         self.is_inited = True
+        configuration = {}
 
         while True:
             time.sleep(1)
@@ -539,9 +542,14 @@ class SwitchCore:
 
             try:
                 self._check_interface_activity()
-                self.get_interfaces_configuration() # Проверка текущей конфигурации устройств
+                configuration = self.get_interfaces_configuration() # Проверка текущей конфигурации устройств
             except Exception as exc:
                 print(str(exc) + '\n' + traceback.format_exc())
+
+            # try:
+            #     SockIO.emit("status", configuration)
+            # except Exception as exc:
+            #     print(f"Ошибка при отправке данных веб сокету {str(exc)}")
 
         self.is_alive = False
 

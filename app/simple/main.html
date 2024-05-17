@@ -151,6 +151,7 @@
    </div>
 
    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js" integrity="sha512-q/dWJ3kcmjBLU4Qc47E4A9kTB4m3wuTY7vkFJDTZKjTs8jhyGQnaUrxa0Ytd0ssMZhbNua9hE+E7Qv1j+DyZwA==" crossorigin="anonymous"></script>
    <script>
 
    function createPort(id, name) {
@@ -286,6 +287,220 @@
    var last_status = false; // Статус сервиса на момент предыдущего запроса
    var last_ports_update_id = 0;
 
+   var onStatusData = function(data)
+   {
+      let result;
+      if(typeof(data) == 'object')
+         result = data;
+      else
+         result = JSON.parse(data);
+
+      let json = result["data"];
+
+      if (!result["ok"])
+      {
+         if (last_status)
+         {
+            last_status = false;
+            document.getElementById("board_bridges").replaceChildren();
+         }
+
+         if (result["debug"])
+            $("#board_ports_global_status").text("debug: "+result["debug"]);
+         else
+            $("#board_ports_global_status").text(result["reason"]);
+
+         return;
+      } else if (!last_status)
+      {
+         last_status = true;
+         $("#board_ports_global_status").text("");
+      }
+
+      // Конфигурация портов изменилась
+      let configuration = json["configuration"]; // Состояния интерфейсов
+      if (last_ports_update_id != json["update_id"])
+      {
+         last_ports_update_id = json["update_id"];
+
+         // Обновляем список доступных к объединению портов
+         let list_internal = document.getElementById("form_add_port_to_group_port");
+         list_internal.replaceChildren();
+         let list_bridge = document.getElementById("form_add_port_to_group_bridge");
+         let list_bridge2 = document.getElementById("form_remove_group_name");
+         list_bridge.replaceChildren();
+         list_bridge2.replaceChildren();
+         let slaved_interfaces = document.getElementById("form_remove_port_from_group_port");
+         slaved_interfaces.replaceChildren();
+
+         // Списки всех портов
+         let form_port_enable = document.getElementById("form_port_enable_select");
+         form_port_enable.replaceChildren();
+         let form_port_disable = document.getElementById("form_port_disable_select");
+         form_port_disable.replaceChildren();
+
+         // Создаём группы интерфейсов
+         let groups = json["groups"];
+         let bridges = document.getElementById("board_bridges");
+         bridges.replaceChildren();
+         for (const [key, value] of Object.entries(groups))
+         {
+            if(key == "*")
+            {
+               // Разгруппированные интерфейсы
+               value.forEach(function (value) {
+                  let option = document.createElement("option");
+                  option.label = value;
+                  list_internal.appendChild(option);value
+               });
+            } else {
+               // Добавляем интерфейс
+               let option = document.createElement("option");
+               option.label = key;
+               list_bridge.appendChild(option);
+               list_bridge2.appendChild(option.cloneNode());
+            }
+
+            let object = document.createElement("label");
+            object.textContent = key;
+            bridges.appendChild(object);
+
+            object = document.createElement("div");
+            object.classList.add("bridge_group");
+            value.forEach(function (value) {
+               object.appendChild(createPort(value, value));
+               let port_conf = configuration[value]
+
+               let exInfo = "";
+               if(port_conf)
+               {
+                  if(port_conf["vlan_access"])
+                     exInfo += "VU "+value["vlan_access"]+"<br>";
+                  if(port_conf["vlan_trunks"])
+                     exInfo += "VT "+value["vlan_trunks"]+"<br>";
+                  if(port_conf["dhcp_snoop"])
+                     exInfo += "dhcp_snoop<br>";
+               } else {
+                  console.log("Для порта "+value+" отсутствует конфигурация");
+               }
+               object.lastChild.lastChild.innerHTML = exInfo;
+
+               let option = document.createElement("option");
+                  option.label = value;
+
+               if(key != "*" && key != value)
+                  slaved_interfaces.appendChild(option.cloneNode());
+
+                  form_port_enable.appendChild(option.cloneNode());
+                  form_port_disable.appendChild(option.cloneNode());
+               
+            });
+            bridges.appendChild(object);
+         }
+
+         let form_vlan_access_port = document.getElementById("form_vlan_access_port");
+         form_vlan_access_port.replaceChildren();
+         let form_vlan_trunks_port = document.getElementById("form_vlan_trunks_port");
+         form_vlan_trunks_port.replaceChildren();
+         let form_vlan_native_untagged_port = document.getElementById("form_vlan_native_untagged_port");
+         form_vlan_native_untagged_port.replaceChildren();
+         let form_dhcp_snopping_on = document.getElementById("form_dhcp_snopping_select_on");
+         form_dhcp_snopping_on.replaceChildren();
+         let form_dhcp_snopping_off = document.getElementById("form_dhcp_snopping_select_off");
+         form_dhcp_snopping_off.replaceChildren();
+
+         slaved_interfaces.childNodes.forEach(function(value) {
+            form_vlan_access_port.appendChild(value.cloneNode());
+            form_vlan_trunks_port.appendChild(value.cloneNode());
+            form_vlan_native_untagged_port.appendChild(value.cloneNode());
+            form_dhcp_snopping_on.appendChild(value.cloneNode());
+            form_dhcp_snopping_off.appendChild(value.cloneNode());
+         });
+      }
+
+      if(json["kernel_support"])
+         $("#kernel_support").html("Активен");
+      else
+         $("#kernel_support").html("Отключен");
+
+      // Обновляем активность портов
+      let activity = new Set(json["activity"]);
+      for (const [key, value] of Object.entries(configuration)) {
+         let port = document.getElementById("ethernet_port_"+key);
+
+         if(!port)
+            continue;
+
+         if(activity.has(port.id.match("^ethernet_port_(.*)$")[1]))
+            port.classList.add("port_r_active");
+         else
+            port.classList.remove("port_r_active");
+
+         is_bridge = value.bridge == key;
+         state = value.state;
+
+         if(state > 0)
+         {
+            state = state & 0b11;
+            port.classList.add("port_l_up");
+         } else {
+            port.classList.remove("port_l_up");
+            port.classList.remove("port_r_up");
+         }
+
+         if(state == 1)
+            port.classList.add("port_r_up");
+         else
+            port.classList.remove("port_r_up");
+
+
+
+         if(state == -1)
+         {
+            port.classList.add("port_not_found")
+            port.classList.remove("port_internal");
+            port.classList.remove("port_bridge");
+         } else {
+
+            if(is_bridge) {
+               port.classList.add("port_bridge");
+               port.classList.remove("port_internal");
+               port.classList.remove("port_not_found");
+            } else{
+               port.classList.add("port_internal");
+               port.classList.remove("port_bridge");
+               port.classList.remove("port_not_found");
+            }
+         }
+      }
+   };
+
+   var socketHandler = function(socket)
+   {
+      
+      // var socket = new WebSocket("ws://"+document.domain+':'+location.port+"/api/v0");
+
+      // var socket = io.connect('http://' + document.domain + ':' + location.port + '/api/v0');
+      // var numbers_received = [];
+      // socket.on('status', function(msg) {
+      //    onStatusData(msg);
+      // });
+
+      
+   };
+
+   $(document).ready(function() {
+      socket = io();
+      socket.emit("status", {"update_id": last_ports_update_id})
+
+      socket.on('status', function(event) {
+         onStatusData(event);
+         setTimeout(function(){
+            socket.emit("status", {"update_id": last_ports_update_id})
+         }, 1000);
+      });
+   });
+
    var refreshSn = function ()
    {
       setTimeout(
@@ -298,181 +513,7 @@
             };
             xhr.onload = () => {
                if (xhr.readyState == 4 && xhr.status == 200) {
-                  let result = JSON.parse(xhr.responseText);
-                  let json = result["data"];
-
-                  if (!result["ok"])
-                  {
-                     if (last_status)
-                     {
-                        last_status = false;
-                        document.getElementById("board_bridges").replaceChildren();
-                     }
-
-                     if (result["debug"])
-                        $("#board_ports_global_status").text("debug: "+result["debug"]);
-                     else
-                        $("#board_ports_global_status").text(result["reason"]);
-
-                     return;
-                  } else if (!last_status)
-                  {
-                     last_status = true;
-                     $("#board_ports_global_status").text("");
-                  }
-
-                  // Конфигурация портов изменилась
-                  let configuration = json["configuration"]; // Состояния интерфейсов
-                  if (last_ports_update_id != json["update_id"])
-                  {
-                     last_ports_update_id = json["update_id"];
-
-                     // Обновляем список доступных к объединению портов
-                     let list_internal = document.getElementById("form_add_port_to_group_port");
-                     list_internal.replaceChildren();
-                     let list_bridge = document.getElementById("form_add_port_to_group_bridge");
-                     let list_bridge2 = document.getElementById("form_remove_group_name");
-                     list_bridge.replaceChildren();
-                     list_bridge2.replaceChildren();
-                     let slaved_interfaces = document.getElementById("form_remove_port_from_group_port");
-                     slaved_interfaces.replaceChildren();
-
-                     // Списки всех портов
-                     let form_port_enable = document.getElementById("form_port_enable_select");
-                     form_port_enable.replaceChildren();
-                     let form_port_disable = document.getElementById("form_port_disable_select");
-                     form_port_disable.replaceChildren();
-
-                     // Создаём группы интерфейсов
-                     let groups = json["groups"];
-                     let bridges = document.getElementById("board_bridges");
-                     bridges.replaceChildren();
-                     for (const [key, value] of Object.entries(groups))
-                     {
-                        if(key == "*")
-                        {
-                           // Разгруппированные интерфейсы
-                           value.forEach(function (value) {
-                              let option = document.createElement("option");
-                              option.label = value;
-                              list_internal.appendChild(option);value
-                           });
-                        } else {
-                           // Добавляем интерфейс
-                           let option = document.createElement("option");
-                           option.label = key;
-                           list_bridge.appendChild(option);
-                           list_bridge2.appendChild(option.cloneNode());
-                        }
-
-                        let object = document.createElement("label");
-                        object.textContent = key;
-                        bridges.appendChild(object);
-
-                        object = document.createElement("div");
-                        object.classList.add("bridge_group");
-                        value.forEach(function (value) {
-                           object.appendChild(createPort(value, value));
-                           let port_conf = configuration[value]
-
-                           let exInfo = "";
-                           if(port_conf["vlan_access"])
-                              exInfo += "VU "+value["vlan_access"]+"<br>";
-                           if(port_conf["vlan_trunks"])
-                              exInfo += "VT "+value["vlan_trunks"]+"<br>";
-                           if(port_conf["dhcp_snoop"])
-                              exInfo += "dhcp_snoop<br>";
-                           object.lastChild.lastChild.innerHTML = exInfo;
-
-                           let option = document.createElement("option");
-                              option.label = value;
-
-                           if(key != "*" && key != value)
-                              slaved_interfaces.appendChild(option.cloneNode());
-
-                              form_port_enable.appendChild(option.cloneNode());
-                              form_port_disable.appendChild(option.cloneNode());
-                           
-                        });
-                        bridges.appendChild(object);
-                     }
-
-                     let form_vlan_access_port = document.getElementById("form_vlan_access_port");
-                     form_vlan_access_port.replaceChildren();
-                     let form_vlan_trunks_port = document.getElementById("form_vlan_trunks_port");
-                     form_vlan_trunks_port.replaceChildren();
-                     let form_vlan_native_untagged_port = document.getElementById("form_vlan_native_untagged_port");
-                     form_vlan_native_untagged_port.replaceChildren();
-                     let form_dhcp_snopping_on = document.getElementById("form_dhcp_snopping_select_on");
-                     form_dhcp_snopping_on.replaceChildren();
-                     let form_dhcp_snopping_off = document.getElementById("form_dhcp_snopping_select_off");
-                     form_dhcp_snopping_off.replaceChildren();
-
-                     slaved_interfaces.childNodes.forEach(function(value) {
-                        form_vlan_access_port.appendChild(value.cloneNode());
-                        form_vlan_trunks_port.appendChild(value.cloneNode());
-                        form_vlan_native_untagged_port.appendChild(value.cloneNode());
-                        form_dhcp_snopping_on.appendChild(value.cloneNode());
-                        form_dhcp_snopping_off.appendChild(value.cloneNode());
-                     });
-                  }
-
-                  if(json["kernel_support"])
-                     $("#kernel_support").html("Активен");
-                  else
-                     $("#kernel_support").html("Отключен");
-
-                  // Обновляем активность портов
-                  let activity = new Set(json["activity"]);
-                  for (const [key, value] of Object.entries(configuration)) {
-                     let port = document.getElementById("ethernet_port_"+key);
-
-                     if(!port)
-                        continue;
-
-                     if(activity.has(port.id.match("^ethernet_port_(.*)$")[1]))
-                        port.classList.add("port_r_active");
-                     else
-                        port.classList.remove("port_r_active");
-
-                     is_bridge = value.bridge == key;
-                     state = value.state;
-
-                     if(state > 0)
-                     {
-                        state = state & 0b11;
-                        port.classList.add("port_l_up");
-                     } else {
-                        port.classList.remove("port_l_up");
-                        port.classList.remove("port_r_up");
-                     }
-
-                     if(state == 1)
-                        port.classList.add("port_r_up");
-                     else
-                        port.classList.remove("port_r_up");
-
-
-
-                     if(state == -1)
-                     {
-                        port.classList.add("port_not_found")
-                        port.classList.remove("port_internal");
-                        port.classList.remove("port_bridge");
-                     } else {
-
-                        if(is_bridge) {
-                           port.classList.add("port_bridge");
-                           port.classList.remove("port_internal");
-                           port.classList.remove("port_not_found");
-                        } else{
-                           port.classList.add("port_internal");
-                           port.classList.remove("port_bridge");
-                           port.classList.remove("port_not_found");
-                        }
-                     }
-                  }
-
+                  onStatusData(xhr.responseText)
                } else {
                   console.log('Error: '+xhr.status+' '+xhr.readyState);
                }
@@ -487,7 +528,7 @@
       );
    };
 
-   refreshSn();
+   //refreshSn();
    
    function makeRequest(data, onload) {
       const xhr = new XMLHttpRequest();

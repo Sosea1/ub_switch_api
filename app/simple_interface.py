@@ -1,5 +1,6 @@
-from app import webapi
+from app import webapi, SockIO
 from flask import request, send_from_directory, make_response
+from flask_socketio import SocketIO
 from enum import Enum
 from . import switch
 import traceback
@@ -64,6 +65,15 @@ def web_entry_main():
 def web_not_found(exc):
     return create_error('Запрос не корректен')
 
+
+@SockIO.on('status')
+def onWebSocketEvent(json):
+    client_update_id = json.get("update_id")
+    if not client_update_id and type(client_update_id) != int:
+        SockIO.emit('status', create_error('Отсутствует параметр update_id'))
+        return
+
+    SockIO.emit('status', switch.SWC.get_ports(int(client_update_id)))
 
 # Обработка запросов (POST)
 @webapi.route("/api/v0/", methods = ['POST']) 
@@ -219,3 +229,5 @@ def web_action_init_swc():
 
     switch.SWC = switch.SwitchCore()
     return create_result("Будет сделано")
+
+web_action_init_swc()

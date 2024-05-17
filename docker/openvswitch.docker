@@ -1,6 +1,7 @@
 FROM debian:bookworm
 
-RUN apt-get update -y && apt-get install -y openvswitch-switch openvswitch-common supervisor python3 python3-pip git python3-flask python3-flask-cors python3-flask-marshmallow python3-openvswitch
+RUN apt-get update -y && apt-get install -y openvswitch-switch openvswitch-common supervisor python3 python3-pip git python3-flask python3-socketio python3-flask-cors python3-flask-marshmallow python3-openvswitch
+RUN pip3 install simple-websocket --break
 RUN mkdir -p /app/mount
 RUN bash -c "source /usr/share/openvswitch/scripts/ovs-lib; ovsdb_tool create /etc/openvswitch/conf.db /usr/share/openvswitch/vswitch.ovsschema"
 WORKDIR /app
