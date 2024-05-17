@@ -323,7 +323,6 @@ class SwitchCore:
 
             return set(devs)
         except Exception as exc:
-            print(exc)
             return []
 
     def kernel_dhcp_snooping_write(self, devs: set):
