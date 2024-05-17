@@ -288,7 +288,7 @@ class SwitchCore:
             for bridge in bridges_groups:
                 if port in bridges_groups[bridge]:
                     configuration[port]["bridge"] = bridge
-                    configuration[port].update(bridges_groups[port])
+                    configuration[port].update(bridges_groups[bridge][port])
 
         # Добавляем отсутствующие, но упоминающиеся порты
         for port in bridges_groups:
