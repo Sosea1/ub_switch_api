@@ -1,13 +1,14 @@
 FROM debian:bookworm
 
-RUN apt-get update -y && apt-get install -y openvswitch-switch openvswitch-common supervisor
+RUN apt-get update -y && apt-get install -y openvswitch-switch openvswitch-common supervisor python3 python3-pip git python3-flask python3-flask-cors python3-flask-marshmallow python3-openvswitch
 RUN mkdir -p /app/mount
 RUN bash -c "source /usr/share/openvswitch/scripts/ovs-lib; ovsdb_tool create /etc/openvswitch/conf.db /usr/share/openvswitch/vswitch.ovsschema"
 WORKDIR /app
 COPY ovs-supervisord.config .
 RUN mkdir -p /var/run/openvswitch/
-
-VOLUME [ "/app/mount/" ]
+RUN git clone "https://github.com/Sosea1/ub_switch_api" --branch release-0 server
+WORKDIR /app/server
+EXPOSE 5000
 
 CMD [ "supervisord", "-nc", "/app/ovs-supervisord.config", "-l", "/app/mount/supervisord.log" ]
 # supervisord -c /app/config
