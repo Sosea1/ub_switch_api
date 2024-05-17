@@ -217,6 +217,17 @@ class SwitchCore:
 
         # Сначала определим не нужные порты (docker)
         new_excluded = set()
+        try:
+            for iter in self.run_cmd(["docker", "network", "ls", "--format", "{{json . }}"]).split('\n'):
+                config = json.loads(iter)
+
+                if config["Driver"] != "bridge":
+                    continue
+
+                new_excluded.add("br-"+config["ID"])
+        except:
+            pass
+
         for dir in devs.iterdir():
             for dir2 in dir.iterdir():
                 if not dir2.name.startswith("upper_"):
@@ -224,7 +235,6 @@ class SwitchCore:
 
                 if open(dir2 / "address", "r").readline().startswith("02:42"):
                     new_excluded.add(dir.name)
-                    new_excluded.add(dir2.name[6:])
 
         self._excluded_ports_docker = new_excluded
 
@@ -287,7 +297,7 @@ class SwitchCore:
                     configuration[port].update(bridges_groups[port])
 
         # Добавляем отсутствующие, но упоминающиеся порты
-        for port in bridges_groups[bridge]:
+        for port in bridges_groups:
             if port not in configuration:
                 configuration[port] = {"state": -1}
 
