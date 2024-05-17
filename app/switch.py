@@ -46,7 +46,7 @@ class SwitchCore:
             output = self.run_cmd(['bash', '-c', 'lsmod | grep main'])
             self._is_module_loaded = len(output) > 0
         except Exception as exc:
-            self._is_module_loaded = false
+            self._is_module_loaded = False
             print(f"Не удалось установить модуль ядра {str(exc)}")
 
         # Запуск рабочего потока
