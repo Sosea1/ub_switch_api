@@ -1,8 +1,5 @@
 version: '3.5'
 
-networks:
-  local:
-
 services:
   openvswitch:
     container_name: openvswitch
@@ -18,9 +15,11 @@ services:
     build:
       context: .
       dockerfile: ub_switch_api.docker
+    volumes:
+      - ./core/:/var/run/openvswitch/
     restart: unless-stopped
     depends_on:
       - openvswitch
-    expose:
+    ports:
       - 8081:5000
 

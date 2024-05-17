@@ -1,7 +1,7 @@
 FROM debian:bookworm
 
-RUN apt-get update -y && apt-get install -y python3 python3-pip git python3-flask python3-flask-cors python3-flask-marshmallow
-RUN mkdir -p /app/mount
+RUN apt-get update -y && apt-get install -y python3 python3-pip git python3-flask python3-flask-cors python3-flask-marshmallow python3-openvswitch
+RUN mkdir -p /app/mount /var/run/openvswitch/
 WORKDIR /app
 RUN git clone "https://github.com/Sosea1/ub_switch_api" --branch release-0 server
 WORKDIR /app/server
