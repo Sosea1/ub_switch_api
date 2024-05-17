@@ -217,19 +217,13 @@ class SwitchCore:
 
         # Сначала определим не нужные порты (docker)
         new_excluded = set()
-        try:
-            for iter in self.run_cmd(["docker", "network", "ls", "--format", "{{json . }}"]).split('\n'):
-                config = json.loads(iter)
-
-                if config["Driver"] != "bridge":
-                    continue
-
-                new_excluded.add("br-"+config["ID"])
-        except:
-            pass
 
         for dir in devs.iterdir():
+            if open(dir / "address", "r").readline().startswith("02:42"):
+                new_excluded.add(dir.name)
+
             for dir2 in dir.iterdir():
+
                 if not dir2.name.startswith("upper_"):
                     continue
 
