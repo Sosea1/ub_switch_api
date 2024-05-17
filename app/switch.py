@@ -39,11 +39,15 @@ class SwitchCore:
         # for iter in range(virtual_ports):
         #     self.vsctl(['add-port', 'dummy_switch', f'ether{iter}', '--', 'set', 'interface', f'ether{iter}', 'type=internal'])
 
-        self._module_path = os.path.dirname(os.path.realpath(__file__))+'/main.ko'
-        self.run_cmd(['rmmod', 'main.ko'])
-        self.run_cmd(['insmod', self._module_path])
-        output = self.run_cmd(['bash', '-c', 'lsmod | grep main'])
-        self._is_module_loaded = len(output) > 0
+        try:
+            self._module_path = os.path.dirname(os.path.realpath(__file__))+'/main.ko'
+            self.run_cmd(['rmmod', 'main.ko'])
+            self.run_cmd(['insmod', self._module_path])
+            output = self.run_cmd(['bash', '-c', 'lsmod | grep main'])
+            self._is_module_loaded = len(output) > 0
+        except Exception as exc:
+            self._is_module_loaded = False
+            print(f"Не удалось установить модуль ядра {str(exc)}")
 
         # Запуск рабочего потока
         self._thread_loop = threading.Thread(target=self._run)
@@ -70,7 +74,10 @@ class SwitchCore:
 
             time.sleep(0.001)
 
-        self.run_cmd(['rmmod', 'main.ko'])
+        try:
+            self.run_cmd(['rmmod', 'main.ko'])
+        except:
+            pass
         
         if self.is_alive:
             print("WatchDog: поток ядра коммутатора не завершил работу вовремя")
@@ -210,14 +217,18 @@ class SwitchCore:
 
         # Сначала определим не нужные порты (docker)
         new_excluded = set()
+
         for dir in devs.iterdir():
+            if open(dir / "address", "r").readline().startswith("02:42"):
+                new_excluded.add(dir.name)
+
             for dir2 in dir.iterdir():
+
                 if not dir2.name.startswith("upper_"):
                     continue
 
                 if open(dir2 / "address", "r").readline().startswith("02:42"):
                     new_excluded.add(dir.name)
-                    new_excluded.add(dir2.name[6:])
 
         self._excluded_ports_docker = new_excluded
 
@@ -277,10 +288,10 @@ class SwitchCore:
             for bridge in bridges_groups:
                 if port in bridges_groups[bridge]:
                     configuration[port]["bridge"] = bridge
-                    configuration[port].update(bridges_groups[port])
+                    configuration[port].update(bridges_groups[bridge][port])
 
         # Добавляем отсутствующие, но упоминающиеся порты
-        for port in bridges_groups[bridge]:
+        for port in bridges_groups:
             if port not in configuration:
                 configuration[port] = {"state": -1}
 
@@ -306,7 +317,6 @@ class SwitchCore:
 
             return set(devs)
         except Exception as exc:
-            print(exc)
             return []
 
     def kernel_dhcp_snooping_write(self, devs: set):

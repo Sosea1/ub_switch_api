@@ -1,11 +1,8 @@
 version: '3.5'
 
-networks:
-  local:
-
 services:
   openvswitch:
-    container_name: openvswitch
+    container_name: ub_switch_api
     build:
       context: .
       dockerfile: openvswitch.docker
@@ -13,14 +10,5 @@ services:
       - ./core:/app/mount
     privileged: true
     network_mode: host
-  backend:
-    container_name: ub_switch_api
-    build:
-      context: .
-      dockerfile: ub_switch_api.docker
     restart: unless-stopped
-    depends_on:
-      - openvswitch
-    expose:
-      - 8081:5000
 
