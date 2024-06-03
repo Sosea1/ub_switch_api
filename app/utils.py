@@ -16,8 +16,9 @@ import ovs.jsonrpc
 import os
 import subprocess
 from copy import deepcopy
+from app import vsctl
 
-from .dataclasses.port_security import PSPorts
+from .dataclasses.dataclasses import PSPorts
 
 
 def tabulateError(err):
@@ -126,7 +127,24 @@ def execute_bash_script(script: Union[list, str]):
                 
 def execute_bash_command(command: str):
     subprocess.run(command, shell=True, executable="/bin/bash")
-    
+
+def search_key_in_dict(haystack, needle, path=None) -> list:
+    if path is None:
+        path = []
+    if isinstance(haystack, dict):
+        if needle in haystack:
+            path.append(needle)
+            return path
+        for k, v in haystack.items():
+            result = search_key_in_dict(v, needle, path + [k])
+            if result is not None:
+                return result
+    elif isinstance(haystack, list):
+        for idx, v in enumerate(haystack):
+            result = search_key_in_dict(v, needle, path + [idx])
+            if result is not None:              
+                return result
+
 
 def get_all_ports(args: Turtle) -> list:
     excluded_ports = ['lo', 'ovs-system']
@@ -178,3 +196,9 @@ def get_all_ports(args: Turtle) -> list:
             ports.append(port)
     
     return ports
+
+
+def get_ovs_bridges():
+    result = vsctl.run('list-br')
+    result = result.stdout.read().strip().split('\n')
+    return result

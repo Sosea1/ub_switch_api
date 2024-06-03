@@ -1,17 +1,20 @@
+import pathlib
 import subprocess
 from app import webapi
+import re
 import json
-from flask import jsonify, render_template, request, redirect, url_for, flash, make_response, session
+from flask import Response, jsonify, render_template, request, redirect, url_for, flash, make_response, session
 # from .models import User, Post, Category, Feedback, db
 # from .forms import ContactForm, LoginForm
-from .utils import get_all_ports, makeRequest, parse_to_json, nft_to_normal_json, execute_bash_script, execute_bash_command
-try:
-    from ovs_vsctl import VSCtl, parser
-except Exception as exc:
-    print("Отсутствует модуль ovs_vsctl: " + str(exc))
-from app import vsctl
+from .utils import get_all_ports, get_ovs_bridges, makeRequest, parse_to_json, nft_to_normal_json, execute_bash_script, execute_bash_command
+from app import vsctl, cur
 import os.path
-from .dataclasses.port_security import ps_ports
+from .dataclasses.dataclasses import ACL, ARP, ACLBinding, ACLRules, ARPTable, DHCPServer, PortDHCP
+import hashlib
+try:
+    import yaml
+except Exception as exc:
+    print("Отсутствует модуль yaml: " + str(exc))
 
 
 @webapi.route("/")
@@ -131,28 +134,35 @@ def route_nft_ruleset():
     return nftables
 
 #  Включение DHCP Snooping 
-@webapi.route("/dhcp-snooping/enable")
+@webapi.route("/dhcp-snooping/enable", methods = ['POST'])
 def route_nft_dhcp_snooping_enable():
-    interfaces = request.args.getlist('int')
-    path_to_script = "/root/dhcp_snooping/dhcp_snooping.o"  # может быть другой, подготовить нужно самим
-    for interface in interfaces:
-        command = "ip link set dev {} xdp object {} section xdp_udp_drop".format(interface, path_to_script)
-        execute_bash_command(command)
+    interface = request.args.get('int')
+    path = "/root/dhcp_snooping/dhcp_snooping_" + interface + ".c"
+    if os.path.isfile(path) == False:
+        lines = None
+        with open("/root/dhcp_snooping/dhcp_snooping_ip.c", 'r') as f:
+            lines = f.readlines()
+        with open(path, 'w') as f:
+            for line in lines:
+                new_line = line
+                f.write(new_line)
+                
+    command = "ip link set dev {} xdp object {} section xdp_udp_drop".format(interface, path)
+    execute_bash_command(command)
     
-    return "DHCP Snooping enabled for all given interfaces"
+    return "DHCP Snooping enabled"
 
 #  Выключение DHCP Snooping 
-@webapi.route("/dhcp-snooping/disable")
+@webapi.route("/dhcp-snooping/disable", methods = ['POST'])
 def route_nft_dhcp_snooping_disable():
-    interfaces = request.args.getlist('int')
-    for interface in interfaces:
-        command = "ip link set {} xdpgeneric off".format(interface)
-        execute_bash_command(command)
+    interface = request.args.get('int')
+    command = "ip link set {} xdpgeneric off".format(interface)
+    execute_bash_command(command)
     
-    return "DHCP Snooping disabled for all given interfaces"
+    return "DHCP Snooping disabled"
 
 
-@webapi.route("/dhcp-snooping/add")
+@webapi.route("/dhcp-snooping/add", methods = ['POST'])
 def route_nft_dhcp_snooping_add():
     interface = request.args.get('int')
     address = request.args.get('address')
@@ -218,14 +228,10 @@ def route_nft_dhcp_snooping_add():
     o_path = "/root/dhcp_snooping/dhcp_snooping_" + interface + ".o"
     command = "clang -O2 -g -Wall -target bpf -c {} -o {}".format(path, o_path)
     execute_bash_command(command)
-    command = "ip link set {} xdpgeneric off".format(interface)
-    execute_bash_command(command)
-    command = "ip link set dev {} xdp object {} section xdp_udp_drop".format(interface, o_path)
-    execute_bash_command(command)
     return "address added"
 
 
-@webapi.route("/dhcp-snooping/remove")
+@webapi.route("/dhcp-snooping/remove", methods = ['POST'])
 def route_nft_dhcp_snooping_remove():
     interface = request.args.get('int')
     address = request.args.get('address')
@@ -275,26 +281,66 @@ def route_nft_dhcp_snooping_remove():
     else:
         return "Такого адреса нет"
     
-    command = "ip link set {} xdpgeneric off".format(interface)
+    o_path = "/root/dhcp_snooping/dhcp_snooping_" + interface + ".o"
+    command = "clang -O2 -g -Wall -target bpf -c {} -o {}".format(path, o_path)
     execute_bash_command(command)
-    if flag == True: 
-        o_path = "/root/dhcp_snooping/dhcp_snooping.o"
-        command = "ip link set dev {} xdp object {} section xdp_udp_drop".format(interface, o_path)
-        execute_bash_command(command)
-        
-    else:
-        o_path = "/root/dhcp_snooping/dhcp_snooping_" + interface + ".o"
-        command = "clang -O2 -g -Wall -target bpf -c {} -o {}".format(path, o_path)
-        execute_bash_command(command)
-        command = "ip link set dev {} xdp object {} section xdp_udp_drop".format(interface, o_path)
-        execute_bash_command(command)
     
-    return "address added"
+    return "address removed"
 
+@webapi.route("/dhcp-snooping/view", methods = ['GET'])
+def dhcp_snooping_view():
+    excluded_ports = ['lo', 'ovs-system']
+    ports = []
+    devs = pathlib.Path("/sys/class/net/")
+    for dir in devs.iterdir():
+        if dir.name not in excluded_ports:
+            print(dir.name)
+            path = "/root/dhcp_snooping/dhcp_snooping_" + dir.name + ".c"
+            dhcp_snooping = False
+            if os.path.isfile(path):
+                dhcp_snooping = True
+            port = PortDHCP(port=dir.name, dhcp_snooping=dhcp_snooping)
+            ports.append(port)
+    
+    return ports
 
+@webapi.route("/dhcp-servers/view/<interface>", methods = ['GET'])
+def dhcp_servers_view(interface):
+    excluded_ports = ['lo', 'ovs-system']
+    ports = []
+    devs = pathlib.Path("/sys/class/net/")
+    for dir in devs.iterdir():
+        if dir.name not in excluded_ports:
+            if dir.name != interface:
+                continue
+            path = "/root/dhcp_snooping/dhcp_snooping_" + dir.name + ".c"
+            if os.path.isfile(path):
+                ips = []
+                with open(path, 'r') as f:
+                    lines = f.readlines()
+                for line in lines:
+                    if "dhcp_server_ip[]" in line:
+                        index = line.index("{")
+                        index2 = line.index("}")
+                        ips = line[index+1:index2].split(',')
+                        if(ips[0] == ''):
+                            ips = []
+                for ip in ips:
+                    ip = ip.replace('0x','')
+                    n = 2
+                    address = [ip[i:i+n] for i in range(0, len(ip), n)]
+                    ip_address = ''
+                    for add in address:
+                        int_number = int(add, 16)
+                        ip_address += str(int_number) + '.'
+                    ip_address = ip_address[:-1]
+                    port = DHCPServer(address=ip_address)
+                    ports.append(port)
+    
+    return ports
 
 #--------------DAI--------------------
-@webapi.route("/arp/limit")
+@webapi.route("/arp/limit", methods = ['POST'])
 def route_arp_limit():
     interface = request.args.get('int')
     if interface is None:
@@ -302,7 +348,7 @@ def route_arp_limit():
     limit = ""
     limit_number = request.args.get('limit')
     if limit_number:
-        limit = "limit rate {}/second".format(limit_number)
+        limit = "limit rate {}/minute".format(limit_number)
     else:
         return "specify limit rate"
     json_ruleset = subprocess.run(["nft", "-j", "list", "ruleset"], capture_output=True, text=True)
@@ -320,7 +366,7 @@ def route_arp_limit():
     #print(json.dumps(json_ruleset, indent=4))
     return "DAI enabled for interface {}".format(interface)
 
-@webapi.route("/arp/entry")
+@webapi.route("/arp/entry", methods = ['POST'])
 def route_arp_entry():
     ip = request.args.get('ip')
     if ip is None:
@@ -469,7 +515,7 @@ def route_port_security_view():
     
     ports = get_all_ports(("port_security", None))
     
-    return ps_ports.dump(ports)
+    return ports
     
     
 
@@ -524,7 +570,183 @@ def dos_sysctl_change():
 
     return updated_settings
                 
-                
+
+#------------------------ACL----------------------#
+@webapi.route("/acl/view", methods = ['GET'])
+def view_all_acls():
+    with open("/etc/faucet/acls.yaml", "r") as file:
+        data = yaml.safe_load(file)
+    entries = []
+    acls = list(data['acls'].keys())
+    for acl in acls:
+        rules = len(data['acls'][acl])
+        entry = ACL(str(acl),rules)
+        entries.append(entry)
+    return entries      
+
+
+@webapi.route("/acl/view-rules/<acl_name>", methods = ['GET'])
+def view_rules_acl(acl_name):
+    with open("/etc/faucet/acls.yaml", "r") as file:
+        data = yaml.safe_load(file)
+    entries = []
+    number = 1
+    acl = data['acls'][acl_name]
+    for _ in acl:
+        rule = _['rule']
+        action = rule['actions']
+        if 'allow' not in action:
+            continue
+        allow = int(action['allow'])
+        ip_src = None
+        ip_dst = None
+        protocol = None
+        p_src = None
+        d_src = None
+        if 'ipv4_src' in rule:
+            ip_src = rule['ipv4_src']
+        if 'ipv4_dst' in rule:
+            ip_dst = rule['ipv4_dst']
+        if 'nw_proto' in rule:
+            temp = int(rule['nw_proto'])
+            match temp:
+                case 17:
+                    protocol = "udp"
+                case 6:
+                    protocol = "tcp"
+                case 1:
+                    protocol = "icmp"
+        if protocol is not None:
+            if protocol == "tcp":
+                if 'tcp_src' in rule:
+                    p_src = str(rule['tcp_src'])
+                if 'tcp_dst' in rule:
+                    d_src = str(rule['tcp_dst'])
+            elif protocol == "udp":
+                if 'udp_src' in rule:
+                    p_src = str(rule['udp_src'])
+                if 'udp_dst' in rule:
+                    d_src = str(rule['udp_dst'])
+        entry = ACLRules(rule_id=number, allow=allow, s_ip=ip_src, d_ip=ip_dst,
+                         protocol=protocol, p_src=p_src, d_src=d_src)
+        entries.append(entry)
+        number += 1
+        
+    return entries
+
+@webapi.route("/acl/binding/view", methods = ['GET'])
+def view_binding():
+    bridges = get_ovs_bridges()
+    for bridge in bridges:
+        data = subprocess.run(["ovs-ofctl", "dump-ports-desc", bridge,], capture_output=True, text=True)
+        if data.returncode != 0:
+            return "The command failed with return code:\n"+data.returncode
+        data = data.stdout
+        regex = re.compile(r"\w+\(\w+\)")
+        result = regex.findall(data)
+        with open("/etc/faucet/faucet.yaml", "r") as file:
+            data2 = yaml.safe_load(file)
+        entries = []
+        interfaces = list(data2['dps']['sw1']['interfaces'].keys())
+        for port in result:
+            temp = port.replace(')','').split('(')
+            try:
+                ofctl = int(temp[0])
+            except:
+                continue
+            vsctl = temp[1]
+            if ofctl in interfaces:
+                acls = data2['dps']['sw1']['interfaces'][ofctl]
+                if 'acls_in' in acls:
+                    name = acls['acls_in'][0]
+                    entry = ACLBinding(acl_name=name, port=vsctl,
+                                       direction='Ingress')
+                    entries.append(entry)
+    return entries
+
+@webapi.route("/acl/create-acl", methods = ['POST'])
+def create_acl():
+    return 
+
+@webapi.route("/acl/create-rule", methods = ['POST'])
+def create_rule():
+    return 
+
+@webapi.route("/acl/binding/create", methods = ['POST'])
+def create_binding():
+    return   
+
+#------------------------ARP---------------------------#
+@webapi.route("/arp-table", methods = ['GET'])
+def view_arp_table():
+    entries = []
+    data = subprocess.run("arp -n | jc --arp", shell=True, capture_output=True, text=True)
+    data = data.stdout
+    data = json.loads(data)
+    for acl in data:
+        if 'flags_mask' not in list(acl.keys()):
+            continue
+        if 'M' in acl['flags_mask']:
+            ip = acl['address']
+            mac = acl['hwaddress']
+            entry = ARPTable(ip, mac)
+            entries.append(entry)
+    return entries     
+
+@webapi.route("/arp", methods = ['GET'])
+def arp_view():
+    excluded_ports = ['lo', 'ovs-system']
+    ports = []
+    devs = pathlib.Path("/sys/class/net/")
+    for dir in devs.iterdir():
+        if dir.name not in excluded_ports:
+            port = ARP(port=dir.name, arp=1 if dir.name == "enp0s8" else 0)
+            ports.append(port)
+    return ports
+
+
+count = 0
+
+#-----------------AUTHENTICATE--------------------------#
+@webapi.route("/login", methods = ['GET'])
+def login():
+    username = request.args.get('username')
+    password = request.args.get('password')
+    # password = "secret" + password + "solt12"
+    # hash_object = hashlib.sha256()
+    # hash_object.update(password.encode())
+    # hash_password = hash_object.hexdigest()
+    # res = cur.execute("SELECT login FROM users WHERE login='?' AND password='?'",
+    #                   (username, hash_password))
+    
+    # if (res.fetchone() is None):
+    #     return "Пользователь не зарегистрирован"
+    
+    if username != 'admin' or password != 'Qwerty123':
+        global count
+        if count >= 5:
+            return Response("Произведено слишком много попыток входа", status=429,mimetype='application/json' )
+        count += 1
+        return Response("Неверно введен логин или пароль", status=401,mimetype='application/json' )
+    else:
+        return "Вход произошел успешно" 
+    
+
+    
+
+@webapi.route("/register", methods = ['POST'])
+def register():
+    data = request.get_json()
+    username = data['username']
+    password = data['password']
+    password = "secret" + password + "solt12"
+    hash_object = hashlib.sha256()
+    # Convert the password to bytes and hash it
+    hash_object.update(password.encode())
+    # Get the hex digest of the hash
+    hash_password = hash_object.hexdigest()
+    res = cur.execute("INSERT INTO users (login, password) VALUES (?,?)",username,hash_password)
+    return json.dumps("Пользователь успешно зарегистрирован" )
 
 
 #-----------------DOS---------------------------------------------------------------

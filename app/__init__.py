@@ -2,10 +2,8 @@ from flask import Flask
 import os, config
 from flask_cors import CORS
 from flask_marshmallow import Marshmallow
-try:
-    from ovs_vsctl import VSCtl
-except Exception as exc:
-    print("Отсутствует модуль ovs_vsctl: " + str(exc))
+from ovs_vsctl import VSCtl
+import sqlite3
 
 # создание экземпляра приложения
 webapi = Flask(__name__)
@@ -19,5 +17,7 @@ try:
 except:
     vsctl = NotImplemented
 ma = Marshmallow(webapi)
+con = sqlite3.connect('../database.db')
+cur = con.cursor()
 
 from . import views, simple_interface
