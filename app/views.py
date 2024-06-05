@@ -146,8 +146,10 @@ def route_nft_dhcp_snooping_enable():
             for line in lines:
                 new_line = line
                 f.write(new_line)
-                
-    command = "ip link set dev {} xdp object {} section xdp_udp_drop".format(interface, path)
+    
+    o_path = "/root/dhcp_snooping/dhcp_snooping_" + interface + ".o"
+    command = "clang -O2 -g -Wall -target bpf -c {} -o {}".format(path, o_path)        
+    command = "ip link set dev {} xdp object {} section xdp_udp_drop".format(interface, o_path)
     execute_bash_command(command)
     
     return "DHCP Snooping enabled"
